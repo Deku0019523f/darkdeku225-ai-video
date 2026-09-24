@@ -1,10 +1,11 @@
 const SupportService = require('../services/support');
+const { sendMarkdownSafe } = require('../utils/helpers');
 
 async function handleSupport(bot, chatId) {
   const infoText = SupportService.getInfoText();
   const sites = SupportService.listSites({ onlyActive: true });
 
-  await bot.sendMessage(chatId, `🤝 *Soutien*\n\n${infoText}`, { parse_mode: 'Markdown' });
+  await sendMarkdownSafe(bot, chatId, `🤝 *Soutien*\n\n${infoText}`);
 
   if (sites.length > 0) {
     const keyboard = {

@@ -132,13 +132,59 @@ async function createVideoJob(params) {
 }
 
 /**
+ * Cherche l'URL de la vidéo dans la réponse Agnes, quelle que soit sa forme :
+ * - Video V2.0 : metadata.url
+ * - Video 2.5 / 2.5 Flash : url au premier niveau
+ * - autres variantes (video_url, data.url, output.url...) puis recherche générique
+ *   d'une URL de fichier vidéo dans tout l'objet.
+ */
+function extractVideoUrl(json) {
+  if (!json || typeof json !== 'object') return null;
+  const candidates = [
+    json.metadata && json.metadata.url,
+    json.url,
+    json.video_url,
+    json.data && json.data.url,
+    json.data && json.data.video_url,
+    json.data && json.data.metadata && json.data.metadata.url,
+    json.output && json.output.url,
+    json.result && json.result.url
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && /^https?:\/\//i.test(c)) return c;
+  }
+  // Recherche générique d'une URL de fichier vidéo n'importe où dans la réponse
+  const videoRe = /^https?:\/\/\S+\.(mp4|webm|mov|m4v)(\?\S*)?$/i;
+  const stack = [json];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (typeof cur === 'string') {
+      if (videoRe.test(cur)) return cur;
+    } else if (Array.isArray(cur)) {
+      stack.push(...cur);
+    } else if (cur && typeof cur === 'object') {
+      stack.push(...Object.values(cur));
+    }
+  }
+  return null;
+}
+
+function errorToString(err) {
+  if (!err) return null;
+  if (typeof err === 'string') return err;
+  if (typeof err === 'object') return err.message || JSON.stringify(err);
+  return String(err);
+}
+
+/**
  * Interroge le statut d'une tâche Agnes. Retourne un objet normalisé :
  * { status: 'queued'|'in_progress'|'completed'|'failed', progress, videoUrl, raw }
  */
 async function fetchVideoResult(videoId, apiKeyPlain) {
-  const url = `${config.agnes.baseUrl}${config.agnes.resultPath}?video_id=${encodeURIComponent(
-    videoId
-  )}`;
+  const url =
+    `${config.agnes.baseUrl}${config.agnes.resultPath}` +
+    `?video_id=${encodeURIComponent(videoId)}` +
+    `&model_name=${encodeURIComponent(config.agnes.model)}`;
   const { res, bodyText, json } = await httpJson(url, {
     method: 'GET',
     headers: { Authorization: `Bearer ${apiKeyPlain}` }
@@ -162,11 +208,24 @@ async function fetchVideoResult(videoId, apiKeyPlain) {
 
   const status = json.status || (json.data && json.data.status) || 'in_progress';
   const progress = json.progress ?? (json.data && json.data.progress) ?? null;
-  const metadata = json.metadata || (json.data && json.data.metadata) || {};
-  const videoUrl = metadata.url || json.video_url || null;
-  const errorMessage = json.error || json.message || null;
+  const videoUrl = extractVideoUrl(json);
+  const errorMessage = errorToString(json.error) || errorToString(json.message);
 
-  return { status, progress, videoUrl, errorMessage, raw: json };
+  return { status, progress, videoUrl, errorMessage, raw: json, bodyText };
+}
+
+/**
+ * Méthode "legacy" de récupération : GET /v1/videos/<task_id>.
+ * Utilisée en secours si la tâche est complétée mais que l'URL n'apparaît pas.
+ */
+async function fetchLegacyResult(taskId, apiKeyPlain) {
+  const url = `${config.agnes.baseUrl}${config.agnes.createPath}/${encodeURIComponent(taskId)}`;
+  const { res, json } = await httpJson(url, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${apiKeyPlain}` }
+  });
+  if (!res.ok || !json) return null;
+  return extractVideoUrl(json);
 }
 
 /**
@@ -178,18 +237,22 @@ async function fetchVideoResult(videoId, apiKeyPlain) {
  * de mettre à jour le message Telegram de progression.
  */
 async function pollUntilDone(videoId, apiKeyRow, onProgress) {
+  let rateLimitHits = 0;
+
   for (let i = 0; i < config.agnes.pollMaxAttempts; i++) {
     let result;
     try {
       result = await fetchVideoResult(videoId, apiKeyRow.plainKey);
     } catch (err) {
       if (err instanceof AgnesError && err.rateLimited) {
-        // La clé utilisée pour la création a atteint sa limite pendant le polling :
-        // on la met en cooldown et on continue d'essayer avec la même vidéo un peu plus tard
-        // (le polling n'a pas besoin de clé différente, Agnes suit la tâche par video_id,
-        // mais on protège quand même la clé pour les prochaines créations).
-        ApiKeyManager.putInCooldown(apiKeyRow.id, 30);
-        await sleep(config.agnes.pollIntervalMs);
+        // 429 pendant le polling : on ralentit (backoff progressif) SANS mettre la clé
+        // en cooldown, sinon une simple vidéo en cours bloquerait la clé 30 minutes.
+        rateLimitHits += 1;
+        logger.warn('Limite atteinte pendant le polling, ralentissement', {
+          apiKeyId: apiKeyRow.id,
+          hits: rateLimitHits
+        });
+        await sleep(Math.min(config.agnes.pollIntervalMs * (1 + rateLimitHits), 30000));
         continue;
       }
       throw err;
@@ -200,10 +263,37 @@ async function pollUntilDone(videoId, apiKeyRow, onProgress) {
     }
 
     if (result.status === 'completed') {
-      if (!result.videoUrl) {
-        throw new AgnesError('Vidéo marquée complétée mais URL introuvable (metadata.url).');
+      let videoUrl = result.videoUrl;
+
+      if (!videoUrl) {
+        // Complétée mais sans URL : on journalise la réponse brute (sans secret) pour
+        // diagnostiquer, puis on tente la méthode legacy et quelques relectures, car
+        // l'URL peut apparaître un court instant après le passage à "completed".
+        logger.warn('Vidéo complétée sans URL, tentative de récupération', {
+          videoId,
+          response: (result.bodyText || '').slice(0, 1500)
+        });
+        const taskId = result.raw && (result.raw.task_id || result.raw.id);
+        for (let retry = 0; retry < 5 && !videoUrl; retry++) {
+          await sleep(3000);
+          try {
+            if (taskId) videoUrl = await fetchLegacyResult(taskId, apiKeyRow.plainKey);
+            if (!videoUrl) {
+              const again = await fetchVideoResult(videoId, apiKeyRow.plainKey);
+              videoUrl = again.videoUrl;
+            }
+          } catch (_) {
+            // on réessaie au tour suivant
+          }
+        }
       }
-      return result;
+
+      if (!videoUrl) {
+        throw new AgnesError('Vidéo marquée complétée mais URL introuvable.', {
+          raw: result.raw
+        });
+      }
+      return { ...result, videoUrl };
     }
     if (result.status === 'failed') {
       throw new AgnesError(result.errorMessage || 'La génération Agnes a échoué.', {

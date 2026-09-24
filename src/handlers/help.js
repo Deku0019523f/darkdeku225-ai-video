@@ -1,4 +1,5 @@
 const config = require('../config');
+const { escapeMarkdown, sendMarkdownSafe } = require('../utils/helpers');
 
 async function handleHelp(bot, chatId) {
   const text =
@@ -6,15 +7,15 @@ async function handleHelp(bot, chatId) {
     `*Fonctionnement général*\n` +
     `Ce bot transforme une image que vous envoyez en une courte vidéo animée, à partir d'une description (prompt) que vous rédigez.\n\n` +
     `*Abonnement obligatoire*\n` +
-    `Le service est gratuit, mais vous devez être abonné au canal ${config.telegram.requiredChannelLink} pour l'utiliser. Le bot vérifie réellement votre statut d'abonné, pas seulement un clic sur un bouton.\n\n` +
+    `Le service est gratuit, mais vous devez être abonné au canal ${escapeMarkdown(config.telegram.requiredChannelLink)} pour l'utiliser. Le bot vérifie réellement votre statut d'abonné, pas seulement un clic sur un bouton.\n\n` +
     `*Créer une vidéo, étape par étape*\n` +
-    `1\u20e3 Appuyez sur 🎬 *Créer une vidéo*\n` +
-    `2\u20e3 Envoyez l'image à animer\n` +
-    `3\u20e3 Décrivez ce qui doit se passer dans la vidéo (le prompt)\n` +
-    `4\u20e3 Choisissez le format : 📱 vertical, 🖥️ horizontal, ou 🤖 automatique\n` +
-    `5\u20e3 Choisissez un style visuel (optionnel)\n` +
-    `6\u20e3 Choisissez la durée (optionnelle)\n` +
-    `7\u20e3 Vérifiez le récapitulatif puis lancez la génération\n\n` +
+    `1️⃣ Appuyez sur 🎬 *Créer une vidéo*\n` +
+    `2️⃣ Envoyez l'image à animer\n` +
+    `3️⃣ Décrivez ce qui doit se passer dans la vidéo (le prompt)\n` +
+    `4️⃣ Choisissez le format : 📱 vertical, 🖥️ horizontal, ou 🤖 automatique\n` +
+    `5️⃣ Choisissez un style visuel (optionnel)\n` +
+    `6️⃣ Choisissez la durée (optionnel)\n` +
+    `7️⃣ Vérifiez le récapitulatif puis lancez la génération\n\n` +
     `*Bien rédiger votre prompt*\n` +
     `Décrivez ce qui doit bouger (la personne, la caméra, l'environnement) et ce qui doit rester identique (identité, vêtements, composition). Une description précise donne un meilleur résultat.\n\n` +
     `*Temps de génération*\n` +
@@ -27,7 +28,7 @@ async function handleHelp(bot, chatId) {
     `*Support*\n` +
     `Utilisez le menu 🤝 *Soutien* pour me contacter ou découvrir mes autres projets.`;
 
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+  await sendMarkdownSafe(bot, chatId, text);
 }
 
 module.exports = { handleHelp };

@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('../config');
 const logger = require('../utils/logger');
+const { escapeMarkdown, sendMarkdownSafe } = require('../utils/helpers');
 const { getSession, setState, resetSession } = require('../utils/session');
 const MembershipService = require('../services/membership');
 const CooldownService = require('../services/cooldown');
@@ -167,13 +168,13 @@ async function sendRecap(bot, chatId, telegramUserId) {
   const text =
     `🎬 *Nouvelle vidéo*\n\n` +
     `🖼️ Image : reçue\n` +
-    `✍️ Prompt : ${d.prompt}\n` +
+    `✍️ Prompt : ${escapeMarkdown(d.prompt)}\n` +
     `📐 Format : ${formatLabel}\n` +
     `✨ Style : ${styleLabel}\n` +
     `⏱️ Durée : ${durationLabel}`;
 
   setState(telegramUserId, 'CONFIRMATION', {});
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...confirmationKeyboard() });
+  await sendMarkdownSafe(bot, chatId, text, confirmationKeyboard());
 }
 
 // ------------------------------------------------------------------

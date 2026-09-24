@@ -67,6 +67,31 @@ function formatDate(dateStrOrNull) {
   return d.toLocaleString('fr-FR', { timeZone: 'UTC' }) + ' UTC';
 }
 
+/**
+ * Échappe les caractères spéciaux du Markdown "legacy" de Telegram (_ * ` [).
+ * À utiliser sur tout texte dynamique (liens, prompts, noms...) inséré dans un
+ * message envoyé avec parse_mode: 'Markdown'.
+ */
+function escapeMarkdown(text) {
+  return String(text ?? '').replace(/([_*`\[])/g, '\\$1');
+}
+
+/**
+ * Envoie un message en Markdown ; si Telegram refuse de parser les entités
+ * ("can't parse entities"), renvoie le même message en texte brut au lieu d'échouer.
+ */
+async function sendMarkdownSafe(bot, chatId, text, options = {}) {
+  try {
+    return await bot.sendMessage(chatId, text, { ...options, parse_mode: 'Markdown' });
+  } catch (err) {
+    if (/can't parse entities/i.test(err.message || '')) {
+      const { parse_mode, ...rest } = options;
+      return bot.sendMessage(chatId, text.replace(/\\([_*`\[])/g, '$1'), rest);
+    }
+    throw err;
+  }
+}
+
 function safeUserLabel(user) {
   if (!user) return 'inconnu';
   const name = user.first_name || user.username || String(user.telegram_id);
@@ -80,5 +105,7 @@ module.exports = {
   framesForSeconds,
   sleep,
   formatDate,
+  escapeMarkdown,
+  sendMarkdownSafe,
   safeUserLabel
 };
