@@ -296,6 +296,41 @@ async function handleVideoCallback(bot, query) {
 }
 
 // ------------------------------------------------------------------
+// Envoi de la vidéo : téléchargement côté serveur puis envoi en fichier
+// (Telegram n'arrive pas toujours à récupérer lui-même l'URL Agnes, et l'envoi par URL
+// est limité à 20 Mo ; l'envoi en fichier accepte jusqu'à 50 Mo et conserve le format).
+// ------------------------------------------------------------------
+const MAX_TELEGRAM_UPLOAD_BYTES = 49 * 1024 * 1024;
+
+async function deliverVideo(bot, chatId, videoUrl, { width, height, duration, jobId }) {
+  const tmpPath = path.join(config.tempDir, `video_${jobId}_${Date.now()}.mp4`);
+  try {
+    const res = await fetch(videoUrl);
+    if (!res.ok) throw new Error(`Téléchargement vidéo échoué (HTTP ${res.status})`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length > MAX_TELEGRAM_UPLOAD_BYTES) {
+      throw new Error(`Vidéo trop lourde pour Telegram (${buffer.length} octets)`);
+    }
+    fs.writeFileSync(tmpPath, buffer);
+
+    await bot.sendVideo(
+      chatId,
+      fs.createReadStream(tmpPath),
+      { width, height, duration, supports_streaming: true },
+      { filename: `darkdeku225_${jobId}.mp4`, contentType: 'video/mp4' }
+    );
+  } catch (err) {
+    logger.warn('Envoi de la vidéo en fichier impossible, envoi du lien', {
+      jobId,
+      message: err.message
+    });
+    await bot.sendMessage(chatId, `🎬 Votre vidéo : ${videoUrl}`);
+  } finally {
+    if (fs.existsSync(tmpPath)) fs.unlink(tmpPath, () => {});
+  }
+}
+
+// ------------------------------------------------------------------
 // Génération finale
 // ------------------------------------------------------------------
 async function runGeneration(bot, chatId, telegramUserId) {
@@ -367,9 +402,11 @@ async function runGeneration(bot, chatId, telegramUserId) {
       })
       .catch(() => {});
 
-    await bot.sendVideo(chatId, videoUrl, {}, {}).catch(async () => {
-      // Si l'envoi direct par URL échoue, on informe l'utilisateur avec le lien.
-      await bot.sendMessage(chatId, `🎬 Votre vidéo : ${videoUrl}`);
+    await deliverVideo(bot, chatId, videoUrl, {
+      width,
+      height,
+      duration: durationSeconds,
+      jobId: job.id
     });
 
     await bot.sendMessage(chatId, `Envie de continuer ?`, afterVideoKeyboard());

@@ -37,10 +37,13 @@ const config = {
   },
   tempDir: path.resolve(process.cwd(), required('TEMP_DIR', './temp')),
 
-  // Correspondances format -> résolution (cohérentes avec les ratios 16:9 et 9:16)
+  // Correspondances format -> résolution.
+  // Agnes "normalise" toute taille vers le préset le plus proche : il faut donc envoyer de
+  // vraies proportions 9:16 / 16:9 (multiples de 64, palier 720p). 768x1152 (2:3) était
+  // ramené à 3:4 au lieu de 9:16. Pour des vidéos plus rapides : 448x832 / 832x448 (480p).
   formats: {
-    '9:16': { width: 768, height: 1152, label: '📱 9:16 (vertical)' },
-    '16:9': { width: 1152, height: 768, label: '🖥️ 16:9 (horizontal)' }
+    '9:16': { width: 704, height: 1280, label: '📱 9:16 (vertical)' },
+    '16:9': { width: 1280, height: 704, label: '🖥️ 16:9 (horizontal)' }
   },
 
   // Durée -> num_frames, en respectant num_frames = 8n + 1 et num_frames <= 441
