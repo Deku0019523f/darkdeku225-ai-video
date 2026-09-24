@@ -1,0 +1,23 @@
+{
+  "name": "darkdeku225-ai-video",
+  "version": "1.0.0",
+  "description": "Bot Telegram professionnel de génération de vidéos par IA (image -> vidéo) via l'API Agnes AI",
+  "main": "src/bot.js",
+  "scripts": {
+    "start": "node src/bot.js",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:restart": "pm2 restart darkdeku225-ai-video",
+    "pm2:logs": "pm2 logs darkdeku225-ai-video",
+    "pm2:stop": "pm2 stop darkdeku225-ai-video"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "node-telegram-bot-api": "^0.66.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

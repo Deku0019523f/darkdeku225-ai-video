@@ -1,0 +1,29 @@
+# Environnement
+.env
+
+# Dépendances
+node_modules/
+
+# Base de données
+data/*.sqlite
+data/*.sqlite-journal
+data/*.sqlite-wal
+data/*.sqlite-shm
+
+# Fichiers temporaires (images / vidéos téléchargées)
+temp/*
+!temp/.gitkeep
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# PM2
+.pm2/
+
+# OS / éditeurs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
