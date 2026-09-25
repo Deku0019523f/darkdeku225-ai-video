@@ -14,7 +14,6 @@ const {
 } = require('./handlers/video');
 const {
   openAdminPanel,
-  handleAdminCallback,
   handleAdminTextInput,
   handleAdminPhotoInput
 } = require('./handlers/admin');
@@ -67,6 +66,17 @@ bot.on('message', async (msg) => {
     const text = (msg.text || '').trim();
     if (!text) return;
 
+    const session = getSession(telegramUserId);
+    const isAdminUser = telegramUserId === config.telegram.adminId;
+
+    // Priorité à la navigation admin (menus + saisies en cours) si l'admin
+    // est dans le panel — sinon ces boutons entreraient en conflit avec le
+    // menu principal (ex. "⬅️ Retour" ou "🤝 Soutien" réutilisés dans l'admin).
+    if (isAdminUser && (session.data.adminScreen || session.state.startsWith('ADMIN_'))) {
+      const handledByAdmin = await handleAdminTextInput(bot, msg);
+      if (handledByAdmin) return;
+    }
+
     switch (text) {
       case '🎬 Créer une vidéo':
         await startVideoCreation(bot, msg);
@@ -86,12 +96,7 @@ bot.on('message', async (msg) => {
 
     if (text.startsWith('/')) return; // autres commandes non gérées
 
-    // Entrée texte admin (ajout de clé, ads, sites...) en priorité si en session admin
-    const handledByAdmin = await handleAdminTextInput(bot, msg);
-    if (handledByAdmin) return;
-
     // Sinon, entrée texte du workflow vidéo (le prompt)
-    const session = getSession(telegramUserId);
     if (session.state === 'WAITING_PROMPT') {
       await handlePromptText(bot, msg);
       return;
@@ -111,9 +116,6 @@ bot.on('message', async (msg) => {
 bot.on('callback_query', async (query) => {
   try {
     if (!query.from || !query.message) return;
-
-    const handledByAdmin = await handleAdminCallback(bot, query);
-    if (handledByAdmin) return;
 
     const handledByVideo = await handleVideoCallback(bot, query);
     if (handledByVideo) return;

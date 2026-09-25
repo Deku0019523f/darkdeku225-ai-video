@@ -1,120 +1,118 @@
-function adminPanelKeyboard() {
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '📊 Statistiques', callback_data: 'admin_stats' }],
-        [{ text: '🔑 API', callback_data: 'admin_api' }],
-        [{ text: '📢 Ads', callback_data: 'admin_ads' }],
-        [{ text: '🤝 Soutien', callback_data: 'admin_support' }]
-      ]
-    }
-  };
+/**
+ * Claviers du panel admin : tous en ReplyKeyboardMarkup (boutons persistants en bas
+ * de l'écran), comme demandé, plutôt qu'en InlineKeyboardMarkup (boutons sous le
+ * message). Chaque écran du panel a son propre clavier ; le workflow vidéo (côté
+ * utilisateur) garde ses boutons inline dans keyboards/video.js, non concerné ici.
+ */
+
+const SKIP_LABEL = '⏭️ Passer';
+const CANCEL_LABEL = '❌ Annuler';
+const CONFIRM_LABEL = '✅ Confirmer';
+const BACK_LABEL = '⬅️ Retour';
+const BACK_TO_LIST_LABEL = '⬅️ Retour à la liste';
+const QUIT_LABEL = "🏠 Quitter l'admin";
+
+function kb(rows) {
+  return { reply_markup: { keyboard: rows, resize_keyboard: true, is_persistent: true } };
 }
 
-function apiPanelKeyboard() {
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '📊 Statistiques', callback_data: 'api_stats' }],
-        [{ text: '➕ Ajouter une clé', callback_data: 'api_add' }],
-        [{ text: '🗑 Supprimer une clé', callback_data: 'api_remove' }],
-        [{ text: '🔄 Actualiser', callback_data: 'admin_api' }],
-        [{ text: '⬅️ Retour', callback_data: 'admin_back' }]
-      ]
-    }
-  };
+/** Ajoute un identifiant traçable à la fin d'un libellé de bouton : "Gérer (#4)". */
+function withId(label, id) {
+  return `${label} (#${id})`;
 }
 
-function apiKeyListKeyboard(keys, actionPrefix) {
-  const rows = keys.map((k) => [
-    { text: `🔑 API #${k.id} ${k.masked_key}`, callback_data: `${actionPrefix}_${k.id}` }
+/** Récupère l'identifiant ajouté par withId() dans le texte d'un bouton pressé. */
+function extractId(text) {
+  const m = /\(#(\d+)\)\s*$/.exec(text || '');
+  return m ? parseInt(m[1], 10) : null;
+}
+
+function adminMainKeyboard() {
+  return kb([
+    ['📊 Statistiques'],
+    ['🔑 Clés API', '📢 Publicités'],
+    ['🤝 Soutien'],
+    [QUIT_LABEL]
   ]);
-  rows.push([{ text: '⬅️ Retour', callback_data: 'admin_api' }]);
-  return { reply_markup: { inline_keyboard: rows } };
 }
 
-function confirmDeleteKeyboard(actionPrefix, id) {
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: '✅ Oui', callback_data: `${actionPrefix}_confirm_${id}` },
-          { text: '❌ Annuler', callback_data: 'admin_api' }
-        ]
-      ]
-    }
-  };
+function apiMenuKeyboard() {
+  return kb([
+    ['📊 Détails des clés'],
+    ['➕ Ajouter une clé', '🗑 Supprimer une clé'],
+    [BACK_LABEL]
+  ]);
 }
 
-function adsPanelKeyboard() {
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '➕ Ajouter une publicité', callback_data: 'ads_add' }],
-        [{ text: '📋 Liste des publicités', callback_data: 'ads_list' }],
-        [{ text: '⬅️ Retour', callback_data: 'admin_back' }]
-      ]
-    }
-  };
+function adsMenuKeyboard() {
+  return kb([['➕ Ajouter une publicité'], [BACK_LABEL]]);
+}
+
+function supportMenuKeyboard() {
+  return kb([["✏️ Modifier le texte d'info"], ['🌐 Gérer les sites'], [BACK_LABEL]]);
+}
+
+function cancelKeyboard() {
+  return kb([[CANCEL_LABEL]]);
+}
+
+function skipCancelKeyboard() {
+  return kb([[SKIP_LABEL], [CANCEL_LABEL]]);
+}
+
+function confirmCancelKeyboard(confirmLabel = CONFIRM_LABEL) {
+  return kb([[confirmLabel, CANCEL_LABEL]]);
+}
+
+function keyDeleteSelectKeyboard(keys) {
+  const rows = keys.map((k) => [withId(`🔑 ${k.masked_key}`, k.id)]);
+  rows.push([CANCEL_LABEL]);
+  return kb(rows);
+}
+
+function adsListManageKeyboard(ads) {
+  const rows = ads.map((a) => [withId('⚙️ Gérer une publicité', a.id)]);
+  rows.push(['➕ Ajouter une publicité']);
+  rows.push([BACK_LABEL]);
+  return kb(rows);
 }
 
 function adItemKeyboard(ad) {
   const toggleLabel = ad.active ? '🔴 Désactiver' : '🟢 Activer';
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '✏️ Modifier', callback_data: `ad_edit_${ad.id}` }],
-        [{ text: toggleLabel, callback_data: `ad_toggle_${ad.id}` }],
-        [{ text: '🗑 Supprimer', callback_data: `ad_delete_${ad.id}` }],
-        [{ text: '⬅️ Retour', callback_data: 'ads_list' }]
-      ]
-    }
-  };
+  return kb([[toggleLabel], ['📣 Diffuser à tous'], ['🗑 Supprimer'], [BACK_TO_LIST_LABEL]]);
 }
 
-function supportPanelKeyboard() {
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '👤 Informations', callback_data: 'support_info' }],
-        [{ text: '🌐 Sites', callback_data: 'support_sites' }],
-        [{ text: '⬅️ Retour', callback_data: 'admin_back' }]
-      ]
-    }
-  };
-}
-
-function supportSitesKeyboard(sites) {
-  const rows = sites.map((s) => [
-    { text: `${s.active ? '🟢' : '🔴'} ${s.name}`, callback_data: `site_view_${s.id}` }
-  ]);
-  rows.push([{ text: '➕ Ajouter un site', callback_data: 'site_add' }]);
-  rows.push([{ text: '⬅️ Retour', callback_data: 'admin_support' }]);
-  return { reply_markup: { inline_keyboard: rows } };
+function sitesListManageKeyboard(sites) {
+  const rows = sites.map((s) => [withId(`⚙️ Gérer ${s.name}`, s.id)]);
+  rows.push(['➕ Ajouter un site']);
+  rows.push([BACK_LABEL]);
+  return kb(rows);
 }
 
 function siteItemKeyboard(site) {
   const toggleLabel = site.active ? '🔴 Désactiver' : '🟢 Activer';
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '✏️ Modifier', callback_data: `site_edit_${site.id}` }],
-        [{ text: toggleLabel, callback_data: `site_toggle_${site.id}` }],
-        [{ text: '🗑 Supprimer', callback_data: `site_delete_${site.id}` }],
-        [{ text: '⬅️ Retour', callback_data: 'support_sites' }]
-      ]
-    }
-  };
+  return kb([[toggleLabel], ['🗑 Supprimer'], [BACK_TO_LIST_LABEL]]);
 }
 
 module.exports = {
-  adminPanelKeyboard,
-  apiPanelKeyboard,
-  apiKeyListKeyboard,
-  confirmDeleteKeyboard,
-  adsPanelKeyboard,
+  SKIP_LABEL,
+  CANCEL_LABEL,
+  CONFIRM_LABEL,
+  BACK_LABEL,
+  BACK_TO_LIST_LABEL,
+  QUIT_LABEL,
+  withId,
+  extractId,
+  adminMainKeyboard,
+  apiMenuKeyboard,
+  adsMenuKeyboard,
+  supportMenuKeyboard,
+  cancelKeyboard,
+  skipCancelKeyboard,
+  confirmCancelKeyboard,
+  keyDeleteSelectKeyboard,
+  adsListManageKeyboard,
   adItemKeyboard,
-  supportPanelKeyboard,
-  supportSitesKeyboard,
+  sitesListManageKeyboard,
   siteItemKeyboard
 };

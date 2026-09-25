@@ -77,6 +77,18 @@ function escapeMarkdown(text) {
 }
 
 /**
+ * Échappe les caractères spéciaux du HTML de Telegram (& < >).
+ * À utiliser sur tout texte dynamique inséré dans un message envoyé avec
+ * parse_mode: 'HTML' (le panel admin, par exemple).
+ */
+function escapeHtml(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
  * Envoie un message en Markdown ; si Telegram refuse de parser les entités
  * ("can't parse entities"), renvoie le même message en texte brut au lieu d'échouer.
  */
@@ -106,6 +118,7 @@ module.exports = {
   sleep,
   formatDate,
   escapeMarkdown,
+  escapeHtml,
   sendMarkdownSafe,
   safeUserLabel
 };

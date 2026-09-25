@@ -1,19 +1,31 @@
+const db = require('../database');
 const config = require('../config');
 const { getSession, setState, resetSession } = require('../utils/session');
 const ApiKeyManager = require('../services/api-manager');
 const VideoManager = require('../services/video-manager');
 const AdsService = require('../services/ads');
 const SupportService = require('../services/support');
-const { formatDate, escapeMarkdown, sendMarkdownSafe } = require('../utils/helpers');
+const { formatDate, escapeHtml, sleep } = require('../utils/helpers');
+const { mainMenuKeyboard } = require('../keyboards/main');
 const {
-  adminPanelKeyboard,
-  apiPanelKeyboard,
-  apiKeyListKeyboard,
-  confirmDeleteKeyboard,
-  adsPanelKeyboard,
+  SKIP_LABEL,
+  CANCEL_LABEL,
+  CONFIRM_LABEL,
+  BACK_LABEL,
+  BACK_TO_LIST_LABEL,
+  QUIT_LABEL,
+  extractId,
+  adminMainKeyboard,
+  apiMenuKeyboard,
+  adsMenuKeyboard,
+  supportMenuKeyboard,
+  cancelKeyboard,
+  skipCancelKeyboard,
+  confirmCancelKeyboard,
+  keyDeleteSelectKeyboard,
+  adsListManageKeyboard,
   adItemKeyboard,
-  supportPanelKeyboard,
-  supportSitesKeyboard,
+  sitesListManageKeyboard,
   siteItemKeyboard
 } = require('../keyboards/admin');
 
@@ -23,15 +35,13 @@ function isAdmin(telegramUserId) {
 
 async function openAdminPanel(bot, chatId, telegramUserId) {
   if (!isAdmin(telegramUserId)) return;
-  await bot.sendMessage(chatId, `👑 *Panel administrateur*`, {
-    parse_mode: 'Markdown',
-    ...adminPanelKeyboard()
+  setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'main' });
+  await bot.sendMessage(chatId, `👑 <b>Panel administrateur</b>`, {
+    parse_mode: 'HTML',
+    ...adminMainKeyboard()
   });
 }
 
-// ------------------------------------------------------------------
-// Statistiques
-// ------------------------------------------------------------------
 // ------------------------------------------------------------------
 // Mise en forme des statistiques (HTML : plus fiable que Markdown, pas
 // d'échappement à gérer pour des chiffres et libellés internes)
@@ -101,13 +111,13 @@ async function showStats(bot, chatId) {
     `├ 🔴 Désactivées : <b>${apiStats.disabled}</b>\n` +
     `└ Requêtes envoyées : <b>${apiStats.usage}</b> (dont ${apiStats.rateLimits} limitées)`;
 
-  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...adminPanelKeyboard() });
+  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...adminMainKeyboard() });
 }
 
 async function showApiKeyStats(bot, chatId) {
   const keys = ApiKeyManager.listAll();
   if (keys.length === 0) {
-    await bot.sendMessage(chatId, `Aucune clé API enregistrée pour le moment.`, apiPanelKeyboard());
+    await bot.sendMessage(chatId, `Aucune clé API enregistrée pour le moment.`, apiMenuKeyboard());
     return;
   }
 
@@ -123,205 +133,119 @@ async function showApiKeyStats(bot, chatId) {
       `├ Taux d'erreur : <b>${errorRate.toFixed(1)}%</b>\n` +
       `└ Dernière utilisation : ${formatDate(k.last_used_at)}\n\n`;
   }
-  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...apiPanelKeyboard() });
+  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...apiMenuKeyboard() });
 }
 
 // ------------------------------------------------------------------
-// Gestion des clés API
+// Diffusion d'une publicité à tous les utilisateurs (message privé),
+// avec tentative d'épinglage chez chacun. C'est la seule façon pour une
+// publicité d'atteindre tout le monde immédiatement : par défaut, les
+// publicités actives ne sont montrées qu'aux utilisateurs qui terminent
+// une génération, une fois toutes les N vidéos (voir ads_frequency).
 // ------------------------------------------------------------------
-async function startAddKey(bot, chatId, telegramUserId) {
-  setState(telegramUserId, 'ADMIN_WAITING_NEW_KEY', {});
-  await bot.sendMessage(chatId, `Envoyez la clé API Agnes.`);
-}
+async function broadcastAdToAllUsers(bot, ad) {
+  const users = db.prepare('SELECT telegram_id FROM users').all();
+  const keyboard = ad.url
+    ? { reply_markup: { inline_keyboard: [[{ text: ad.button_text || 'En savoir plus', url: ad.url }]] } }
+    : {};
 
-async function startRemoveKey(bot, chatId) {
-  const keys = ApiKeyManager.listAll();
-  if (keys.length === 0) {
-    await bot.sendMessage(chatId, `Aucune clé à supprimer.`, apiPanelKeyboard());
-    return;
-  }
-  await bot.sendMessage(
-    chatId,
-    `Sélectionnez la clé à supprimer :`,
-    apiKeyListKeyboard(keys, 'api_delete')
-  );
-}
+  let sent = 0;
+  let pinned = 0;
+  let failed = 0;
 
-async function confirmRemoveKeyPrompt(bot, chatId, id) {
-  const key = ApiKeyManager.getById(id);
-  if (!key) {
-    await bot.sendMessage(chatId, `Clé introuvable.`, apiPanelKeyboard());
-    return;
-  }
-  await bot.sendMessage(
-    chatId,
-    `⚠️ Voulez-vous réellement supprimer cette clé ?\n\n🔑 API #${key.id} ${key.masked_key}`,
-    confirmDeleteKeyboard('api_delete', id)
-  );
-}
-
-async function handleAdminTextInput(bot, msg) {
-  const telegramUserId = msg.from.id;
-  const chatId = msg.chat.id;
-  if (!isAdmin(telegramUserId)) return false;
-  const session = getSession(telegramUserId);
-  const text = (msg.text || '').trim();
-
-  switch (session.state) {
-    case 'ADMIN_WAITING_NEW_KEY': {
-      try {
-        const key = ApiKeyManager.addKey(text);
-        resetSession(telegramUserId);
-        await bot.sendMessage(chatId, `✅ Clé ajoutée avec succès.\n🔑 API #${key.id} ${key.masked_key}`, apiPanelKeyboard());
-      } catch (err) {
-        await bot.sendMessage(chatId, `❌ ${err.message}`);
-      }
-      return true;
-    }
-    case 'ADMIN_AD_WAITING_IMAGE': {
-      // Cette étape attend normalement une photo (voir handleAdminPhotoInput) ; si
-      // l'admin envoie du texte ici, seul "-" (passer) est accepté.
-      if (text === '-') {
-        setState(telegramUserId, 'ADMIN_AD_WAITING_MESSAGE', { adImage: null });
-        await bot.sendMessage(chatId, `Message de la publicité :`);
+  for (const { telegram_id } of users) {
+    try {
+      let message;
+      if (ad.image) {
+        message = await bot.sendPhoto(telegram_id, ad.image, { caption: ad.message, ...keyboard });
       } else {
-        await bot.sendMessage(chatId, `Envoyez une photo, ou "-" pour ne pas mettre d'image.`);
+        message = await bot.sendMessage(telegram_id, ad.message, keyboard);
       }
-      return true;
+      sent += 1;
+      try {
+        await bot.pinChatMessage(telegram_id, message.message_id, { disable_notification: true });
+        pinned += 1;
+      } catch (_) {
+        // Épinglage refusé côté client Telegram de cet utilisateur : pas bloquant.
+      }
+    } catch (err) {
+      failed += 1;
+      const retryAfter = err?.response?.body?.parameters?.retry_after;
+      if (retryAfter) {
+        await sleep((retryAfter + 1) * 1000);
+      }
     }
-    case 'ADMIN_AD_WAITING_MESSAGE': {
-      setState(telegramUserId, 'ADMIN_AD_WAITING_BUTTON', { adMessage: text });
-      await bot.sendMessage(chatId, `Texte du bouton (ou "-" pour aucun) :`);
-      return true;
-    }
-    case 'ADMIN_AD_WAITING_BUTTON': {
-      const buttonText = text === '-' ? null : text;
-      setState(telegramUserId, 'ADMIN_AD_WAITING_URL', { adButtonText: buttonText });
-      await bot.sendMessage(chatId, `Lien de la publicité (ou "-" pour aucun) :`);
-      return true;
-    }
-    case 'ADMIN_AD_WAITING_URL': {
-      const url = text === '-' ? null : text;
-      const d = session.data;
-      const ad = AdsService.add({
-        image: d.adImage || null,
-        message: d.adMessage,
-        buttonText: d.adButtonText,
-        url
-      });
-      resetSession(telegramUserId);
-      await bot.sendMessage(chatId, `✅ Publicité #${ad.id} créée.`, adsPanelKeyboard());
-      return true;
-    }
-    case 'ADMIN_SITE_WAITING_NAME': {
-      setState(telegramUserId, 'ADMIN_SITE_WAITING_DESCRIPTION', { siteName: text });
-      await bot.sendMessage(chatId, `Description du site (ou "-" pour aucune) :`);
-      return true;
-    }
-    case 'ADMIN_SITE_WAITING_DESCRIPTION': {
-      const description = text === '-' ? null : text;
-      setState(telegramUserId, 'ADMIN_SITE_WAITING_URL', { siteDescription: description });
-      await bot.sendMessage(chatId, `URL du site :`);
-      return true;
-    }
-    case 'ADMIN_SITE_WAITING_URL': {
-      setState(telegramUserId, 'ADMIN_SITE_WAITING_BUTTON', { siteUrl: text });
-      await bot.sendMessage(chatId, `Texte du bouton (ou "-" pour utiliser le nom du site) :`);
-      return true;
-    }
-    case 'ADMIN_SITE_WAITING_BUTTON': {
-      const d = session.data;
-      const buttonText = text === '-' ? d.siteName : text;
-      const site = SupportService.addSite({
-        name: d.siteName,
-        description: d.siteDescription,
-        url: d.siteUrl,
-        buttonText,
-        position: 0
-      });
-      resetSession(telegramUserId);
-      await bot.sendMessage(chatId, `✅ Site "${site.name}" ajouté.`, supportPanelKeyboard());
-      return true;
-    }
-    case 'ADMIN_SUPPORT_WAITING_INFO': {
-      SupportService.setInfoText(text);
-      resetSession(telegramUserId);
-      await bot.sendMessage(chatId, `✅ Informations mises à jour.`, supportPanelKeyboard());
-      return true;
-    }
-    default:
-      return false;
+    await sleep(40); // ~25 messages/seconde, sous la limite globale de Telegram
   }
+
+  return { total: users.length, sent, pinned, failed };
 }
 
 // ------------------------------------------------------------------
-// Ads
+// Rendu des écrans "liste" et "détail" (publicités, sites)
 // ------------------------------------------------------------------
-async function listAds(bot, chatId) {
+async function renderAdsList(bot, chatId, telegramUserId) {
   const ads = AdsService.listAll();
-  if (ads.length === 0) {
-    await bot.sendMessage(chatId, `Aucune publicité créée.`, adsPanelKeyboard());
+  setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'ads', adsView: 'list' });
+  const header =
+    ads.length === 0
+      ? `Aucune publicité créée pour le moment.`
+      : `📢 <b>Publicités</b> (${ads.length}) — choisissez-en une à gérer :`;
+  await bot.sendMessage(chatId, header, { parse_mode: 'HTML', ...adsListManageKeyboard(ads) });
+}
+
+async function renderAdItem(bot, chatId, telegramUserId, adId) {
+  const ad = AdsService.getById(adId);
+  if (!ad) {
+    await renderAdsList(bot, chatId, telegramUserId);
     return;
   }
-  for (const ad of ads) {
-    const stateLabel = ad.active ? '🟢 Active' : '🔴 Inactive';
-    const text = `📢 Publicité #${ad.id} — ${stateLabel}\n\n${ad.message}${ad.url ? `\n🔗 ${ad.url}` : ''}`;
-    if (ad.image) {
-      await bot.sendPhoto(chatId, ad.image, { caption: text, ...adItemKeyboard(ad) }).catch(
-        () => bot.sendMessage(chatId, text, adItemKeyboard(ad))
-      );
-    } else {
-      await bot.sendMessage(chatId, text, adItemKeyboard(ad));
-    }
+  setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'ads', adsView: 'item', selectedAdId: ad.id });
+  const stateLabel = ad.active ? '🟢 Active' : '🔴 Inactive';
+  const text =
+    `📢 <b>Publicité #${ad.id}</b> — ${stateLabel}\n\n` +
+    `${escapeHtml(ad.message)}` +
+    `${ad.url ? `\n🔗 ${escapeHtml(ad.url)}` : ''}` +
+    `${ad.button_text ? `\n🔘 Bouton : ${escapeHtml(ad.button_text)}` : ''}\n\n` +
+    `👁 Affichée automatiquement ${ad.display_count} fois jusqu'ici`;
+
+  if (ad.image) {
+    await bot
+      .sendPhoto(chatId, ad.image, { caption: text, parse_mode: 'HTML', ...adItemKeyboard(ad) })
+      .catch(() => bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...adItemKeyboard(ad) }));
+  } else {
+    await bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...adItemKeyboard(ad) });
   }
 }
 
-async function toggleAd(bot, chatId, id) {
-  const ad = AdsService.getById(id);
-  if (!ad) return;
-  AdsService.setActive(id, ad.active ? 0 : 1);
-  await bot.sendMessage(chatId, `Statut de la publicité #${id} mis à jour.`, adsPanelKeyboard());
-}
-
-async function deleteAd(bot, chatId, id) {
-  AdsService.remove(id);
-  await bot.sendMessage(chatId, `🗑 Publicité #${id} supprimée.`, adsPanelKeyboard());
-}
-
-// ------------------------------------------------------------------
-// Sites de soutien
-// ------------------------------------------------------------------
-async function listSites(bot, chatId) {
+async function renderSitesList(bot, chatId, telegramUserId) {
   const sites = SupportService.listSites();
-  await bot.sendMessage(chatId, `🌐 *Sites configurés*`, {
-    parse_mode: 'Markdown',
-    ...supportSitesKeyboard(sites)
+  setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'support', supportView: 'sites-list' });
+  const header =
+    sites.length === 0
+      ? `Aucun site configuré pour le moment.`
+      : `🌐 <b>Sites configurés</b> (${sites.length}) — choisissez-en un à gérer :`;
+  await bot.sendMessage(chatId, header, { parse_mode: 'HTML', ...sitesListManageKeyboard(sites) });
+}
+
+async function renderSiteItem(bot, chatId, telegramUserId, siteId) {
+  const site = SupportService.getSite(siteId);
+  if (!site) {
+    await renderSitesList(bot, chatId, telegramUserId);
+    return;
+  }
+  setState(telegramUserId, 'ADMIN_IDLE', {
+    adminScreen: 'support',
+    supportView: 'site-item',
+    selectedSiteId: site.id
   });
-}
-
-async function viewSite(bot, chatId, id) {
-  const site = SupportService.getSite(id);
-  if (!site) return;
   const text =
-    `🌐 *${escapeMarkdown(site.name)}*\n\n` +
-    `${escapeMarkdown(site.description || '')}\n` +
-    `🔗 ${escapeMarkdown(site.url)}\n` +
-    `Bouton : ${escapeMarkdown(site.button_text)}\n` +
-    `Position : ${site.position}\n` +
+    `🌐 <b>${escapeHtml(site.name)}</b>\n\n` +
+    `${escapeHtml(site.description || '')}\n` +
+    `🔗 ${escapeHtml(site.url)}\n` +
+    `🔘 Bouton : ${escapeHtml(site.button_text)}\n` +
     `Statut : ${site.active ? '🟢 Actif' : '🔴 Inactif'}`;
-  await sendMarkdownSafe(bot, chatId, text, siteItemKeyboard(site));
-}
-
-async function toggleSite(bot, chatId, id) {
-  const site = SupportService.getSite(id);
-  if (!site) return;
-  SupportService.updateSite(id, { active: site.active ? 0 : 1 });
-  await listSites(bot, chatId);
-}
-
-async function deleteSite(bot, chatId, id) {
-  SupportService.removeSite(id);
-  await bot.sendMessage(chatId, `🗑 Site supprimé.`, supportPanelKeyboard());
+  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...siteItemKeyboard(site) });
 }
 
 // ------------------------------------------------------------------
@@ -337,124 +261,465 @@ async function handleAdminPhotoInput(bot, msg) {
   const photos = msg.photo;
   const best = photos[photos.length - 1];
   setState(telegramUserId, 'ADMIN_AD_WAITING_MESSAGE', { adImage: best.file_id });
-  await bot.sendMessage(chatId, `Message de la publicité :`);
+  await bot.sendMessage(chatId, `Message de la publicité :`, cancelKeyboard());
   return true;
 }
 
 // ------------------------------------------------------------------
-// Dispatch des callback_query du panel admin
+// Entrée principale : saisies de texte pendant une création/suppression
+// (tier 1), puis appui sur un bouton de clavier de menu (tier 2).
 // ------------------------------------------------------------------
-async function handleAdminCallback(bot, query) {
-  const telegramUserId = query.from.id;
-  const chatId = query.message.chat.id;
-  const data = query.data;
-
+async function handleAdminTextInput(bot, msg) {
+  const telegramUserId = msg.from.id;
+  const chatId = msg.chat.id;
   if (!isAdmin(telegramUserId)) return false;
-  if (!data.startsWith('admin_') && !data.startsWith('api_') && !data.startsWith('ads_') &&
-      !data.startsWith('ad_') && !data.startsWith('support_') && !data.startsWith('site_')) {
-    return false;
+  const session = getSession(telegramUserId);
+  const text = (msg.text || '').trim();
+
+  switch (session.state) {
+    case 'ADMIN_WAITING_NEW_KEY': {
+      if (text === CANCEL_LABEL) {
+        setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'api' });
+        await bot.sendMessage(chatId, `❌ Annulé.`, apiMenuKeyboard());
+        return true;
+      }
+      try {
+        const key = ApiKeyManager.addKey(text);
+        setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'api' });
+        await bot.sendMessage(
+          chatId,
+          `✅ Clé ajoutée avec succès.\n🔑 API #${key.id} ${key.masked_key}`,
+          apiMenuKeyboard()
+        );
+      } catch (err) {
+        await bot.sendMessage(chatId, `❌ ${err.message}`, cancelKeyboard());
+      }
+      return true;
+    }
+
+    case 'ADMIN_WAITING_KEY_DELETE_SELECT': {
+      if (text === CANCEL_LABEL) {
+        setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'api' });
+        await bot.sendMessage(chatId, `❌ Annulé.`, apiMenuKeyboard());
+        return true;
+      }
+      const keyId = extractId(text);
+      const key = keyId ? ApiKeyManager.getById(keyId) : null;
+      if (!key) {
+        await bot.sendMessage(chatId, `Sélection invalide, utilisez les boutons ci-dessous.`);
+        return true;
+      }
+      setState(telegramUserId, 'ADMIN_WAITING_KEY_DELETE_CONFIRM', { selectedKeyId: keyId });
+      await bot.sendMessage(
+        chatId,
+        `⚠️ Voulez-vous réellement supprimer cette clé ?\n\n🔑 API #${key.id} ${key.masked_key}`,
+        confirmCancelKeyboard()
+      );
+      return true;
+    }
+
+    case 'ADMIN_WAITING_KEY_DELETE_CONFIRM': {
+      if (text === CONFIRM_LABEL) {
+        ApiKeyManager.removeKey(session.data.selectedKeyId);
+        setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'api' });
+        await bot.sendMessage(chatId, `✅ Clé supprimée.`, apiMenuKeyboard());
+      } else {
+        setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'api' });
+        await bot.sendMessage(chatId, `❌ Annulé.`, apiMenuKeyboard());
+      }
+      return true;
+    }
+
+    case 'ADMIN_AD_WAITING_IMAGE': {
+      if (text === CANCEL_LABEL) {
+        await bot.sendMessage(chatId, `❌ Création annulée.`);
+        await renderAdsList(bot, chatId, telegramUserId);
+        return true;
+      }
+      if (text === SKIP_LABEL) {
+        setState(telegramUserId, 'ADMIN_AD_WAITING_MESSAGE', { adImage: null });
+        await bot.sendMessage(chatId, `Message de la publicité :`, cancelKeyboard());
+        return true;
+      }
+      await bot.sendMessage(
+        chatId,
+        `Envoyez une photo, ou utilisez un bouton ci-dessous.`,
+        skipCancelKeyboard()
+      );
+      return true;
+    }
+    case 'ADMIN_AD_WAITING_MESSAGE': {
+      if (text === CANCEL_LABEL) {
+        await bot.sendMessage(chatId, `❌ Création annulée.`);
+        await renderAdsList(bot, chatId, telegramUserId);
+        return true;
+      }
+      setState(telegramUserId, 'ADMIN_AD_WAITING_BUTTON', { adMessage: text });
+      await bot.sendMessage(chatId, `Texte du bouton (optionnel) :`, skipCancelKeyboard());
+      return true;
+    }
+    case 'ADMIN_AD_WAITING_BUTTON': {
+      if (text === CANCEL_LABEL) {
+        await bot.sendMessage(chatId, `❌ Création annulée.`);
+        await renderAdsList(bot, chatId, telegramUserId);
+        return true;
+      }
+      const buttonText = text === SKIP_LABEL ? null : text;
+      setState(telegramUserId, 'ADMIN_AD_WAITING_URL', { adButtonText: buttonText });
+      await bot.sendMessage(chatId, `Lien de la publicité (optionnel) :`, skipCancelKeyboard());
+      return true;
+    }
+    case 'ADMIN_AD_WAITING_URL': {
+      if (text === CANCEL_LABEL) {
+        await bot.sendMessage(chatId, `❌ Création annulée.`);
+        await renderAdsList(bot, chatId, telegramUserId);
+        return true;
+      }
+      const url = text === SKIP_LABEL ? null : text;
+      const d = session.data;
+      const ad = AdsService.add({
+        image: d.adImage || null,
+        message: d.adMessage,
+        buttonText: d.adButtonText,
+        url
+      });
+      await bot.sendMessage(chatId, `✅ Publicité #${ad.id} créée.`);
+      await renderAdsList(bot, chatId, telegramUserId);
+      return true;
+    }
+
+    case 'ADMIN_AD_DELETE_CONFIRM': {
+      if (text === CONFIRM_LABEL) {
+        AdsService.remove(session.data.selectedAdId);
+        await bot.sendMessage(chatId, `🗑 Publicité supprimée.`);
+        await renderAdsList(bot, chatId, telegramUserId);
+      } else {
+        await renderAdItem(bot, chatId, telegramUserId, session.data.selectedAdId);
+      }
+      return true;
+    }
+
+    case 'ADMIN_AD_BROADCAST_CONFIRM': {
+      if (text !== CONFIRM_LABEL && text !== '✅ Diffuser maintenant') {
+        await renderAdItem(bot, chatId, telegramUserId, session.data.selectedAdId);
+        return true;
+      }
+      const ad = AdsService.getById(session.data.selectedAdId);
+      if (!ad) {
+        await renderAdsList(bot, chatId, telegramUserId);
+        return true;
+      }
+      await bot.sendMessage(
+        chatId,
+        `📣 Diffusion en cours, cela peut prendre un moment selon le nombre d'utilisateurs...`
+      );
+      const result = await broadcastAdToAllUsers(bot, ad);
+      setState(telegramUserId, 'ADMIN_IDLE', {
+        adminScreen: 'ads',
+        adsView: 'item',
+        selectedAdId: ad.id
+      });
+      await bot.sendMessage(
+        chatId,
+        `📣 <b>Diffusion terminée</b>\n\n` +
+          `👥 Destinataires : ${result.total}\n` +
+          `✅ Envoyés : ${result.sent}\n` +
+          `📌 Épinglés : ${result.pinned}\n` +
+          `❌ Échecs : ${result.failed}` +
+          (result.failed > 0
+            ? `\n<i>(généralement des utilisateurs ayant bloqué le bot)</i>`
+            : ''),
+        { parse_mode: 'HTML', ...adItemKeyboard(ad) }
+      );
+      return true;
+    }
+
+    case 'ADMIN_SITE_WAITING_NAME': {
+      if (text === CANCEL_LABEL) {
+        await bot.sendMessage(chatId, `❌ Annulé.`);
+        await renderSitesList(bot, chatId, telegramUserId);
+        return true;
+      }
+      setState(telegramUserId, 'ADMIN_SITE_WAITING_DESCRIPTION', { siteName: text });
+      await bot.sendMessage(chatId, `Description du site :`, skipCancelKeyboard());
+      return true;
+    }
+    case 'ADMIN_SITE_WAITING_DESCRIPTION': {
+      if (text === CANCEL_LABEL) {
+        await bot.sendMessage(chatId, `❌ Annulé.`);
+        await renderSitesList(bot, chatId, telegramUserId);
+        return true;
+      }
+      const description = text === SKIP_LABEL ? null : text;
+      setState(telegramUserId, 'ADMIN_SITE_WAITING_URL', { siteDescription: description });
+      await bot.sendMessage(chatId, `URL du site :`, cancelKeyboard());
+      return true;
+    }
+    case 'ADMIN_SITE_WAITING_URL': {
+      if (text === CANCEL_LABEL) {
+        await bot.sendMessage(chatId, `❌ Annulé.`);
+        await renderSitesList(bot, chatId, telegramUserId);
+        return true;
+      }
+      setState(telegramUserId, 'ADMIN_SITE_WAITING_BUTTON', { siteUrl: text });
+      await bot.sendMessage(
+        chatId,
+        `Texte du bouton (optionnel, sinon le nom du site sera utilisé) :`,
+        skipCancelKeyboard()
+      );
+      return true;
+    }
+    case 'ADMIN_SITE_WAITING_BUTTON': {
+      if (text === CANCEL_LABEL) {
+        await bot.sendMessage(chatId, `❌ Annulé.`);
+        await renderSitesList(bot, chatId, telegramUserId);
+        return true;
+      }
+      const d = session.data;
+      const buttonText = text === SKIP_LABEL ? d.siteName : text;
+      const site = SupportService.addSite({
+        name: d.siteName,
+        description: d.siteDescription,
+        url: d.siteUrl,
+        buttonText,
+        position: 0
+      });
+      await bot.sendMessage(chatId, `✅ Site "${site.name}" ajouté.`);
+      await renderSitesList(bot, chatId, telegramUserId);
+      return true;
+    }
+
+    case 'ADMIN_SITE_DELETE_CONFIRM': {
+      if (text === CONFIRM_LABEL) {
+        SupportService.removeSite(session.data.selectedSiteId);
+        await bot.sendMessage(chatId, `🗑 Site supprimé.`);
+        await renderSitesList(bot, chatId, telegramUserId);
+      } else {
+        await renderSiteItem(bot, chatId, telegramUserId, session.data.selectedSiteId);
+      }
+      return true;
+    }
+
+    case 'ADMIN_SUPPORT_WAITING_INFO': {
+      if (text === CANCEL_LABEL) {
+        setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'support', supportView: 'menu' });
+        await bot.sendMessage(chatId, `❌ Annulé.`, supportMenuKeyboard());
+        return true;
+      }
+      SupportService.setInfoText(text);
+      setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'support', supportView: 'menu' });
+      await bot.sendMessage(chatId, `✅ Informations mises à jour.`, supportMenuKeyboard());
+      return true;
+    }
+
+    default:
+      break; // pas une saisie en cours : on tente une navigation de menu ci-dessous
   }
 
-  await bot.answerCallbackQuery(query.id).catch(() => {});
+  if (!session.data.adminScreen) return false;
+  return handleAdminMenuTap(bot, msg, session, text);
+}
 
-  if (data === 'admin_back') {
-    resetSession(telegramUserId);
-    await openAdminPanel(bot, chatId, telegramUserId);
-    return true;
-  }
-  if (data === 'admin_stats') {
-    await showStats(bot, chatId);
-    return true;
-  }
-  if (data === 'admin_api') {
-    resetSession(telegramUserId);
-    await bot.sendMessage(chatId, `🔑 *Gestion des API*`, { parse_mode: 'Markdown', ...apiPanelKeyboard() });
-    return true;
-  }
-  if (data === 'api_stats') {
-    await showApiKeyStats(bot, chatId);
-    return true;
-  }
-  if (data === 'api_add') {
-    await startAddKey(bot, chatId, telegramUserId);
-    return true;
-  }
-  if (data === 'api_remove') {
-    await startRemoveKey(bot, chatId);
-    return true;
-  }
-  if (data.startsWith('api_delete_confirm_')) {
-    const id = parseInt(data.replace('api_delete_confirm_', ''), 10);
-    ApiKeyManager.removeKey(id);
-    await bot.sendMessage(chatId, `✅ Clé #${id} supprimée.`, apiPanelKeyboard());
-    return true;
-  }
-  if (data.startsWith('api_delete_')) {
-    const id = parseInt(data.replace('api_delete_', ''), 10);
-    await confirmRemoveKeyPrompt(bot, chatId, id);
-    return true;
-  }
+// ------------------------------------------------------------------
+// Navigation dans les menus (appui sur un bouton de clavier persistant)
+// ------------------------------------------------------------------
+async function handleAdminMenuTap(bot, msg, session, text) {
+  const telegramUserId = msg.from.id;
+  const chatId = msg.chat.id;
+  const screen = session.data.adminScreen;
 
-  if (data === 'admin_ads') {
-    await bot.sendMessage(chatId, `📢 *Gestion des publicités*`, { parse_mode: 'Markdown', ...adsPanelKeyboard() });
-    return true;
-  }
-  if (data === 'ads_add') {
-    setState(telegramUserId, 'ADMIN_AD_WAITING_IMAGE', {});
-    await bot.sendMessage(chatId, `Envoyez l'image de la publicité, ou "-" pour ne pas en mettre :`);
-    return true;
-  }
-  if (data === 'ads_list') {
-    await listAds(bot, chatId);
-    return true;
-  }
-  if (data.startsWith('ad_toggle_')) {
-    await toggleAd(bot, chatId, parseInt(data.replace('ad_toggle_', ''), 10));
-    return true;
-  }
-  if (data.startsWith('ad_delete_')) {
-    await deleteAd(bot, chatId, parseInt(data.replace('ad_delete_', ''), 10));
-    return true;
-  }
-  if (data.startsWith('ad_edit_')) {
-    await bot.sendMessage(chatId, `Pour modifier une publicité, supprimez-la puis recréez-la avec ➕ Ajouter une publicité.`, adsPanelKeyboard());
+  if (screen === 'main') {
+    if (text === '📊 Statistiques') {
+      await showStats(bot, chatId);
+      return true;
+    }
+    if (text === '🔑 Clés API') {
+      setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'api' });
+      await bot.sendMessage(chatId, `🔑 <b>Gestion des clés API</b>`, {
+        parse_mode: 'HTML',
+        ...apiMenuKeyboard()
+      });
+      return true;
+    }
+    if (text === '📢 Publicités') {
+      await renderAdsList(bot, chatId, telegramUserId);
+      return true;
+    }
+    if (text === '🤝 Soutien') {
+      setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'support', supportView: 'menu' });
+      await bot.sendMessage(chatId, `🤝 <b>Gestion du Soutien</b>`, {
+        parse_mode: 'HTML',
+        ...supportMenuKeyboard()
+      });
+      return true;
+    }
+    if (text === QUIT_LABEL) {
+      resetSession(telegramUserId);
+      await bot.sendMessage(chatId, `Panel administrateur fermé.`, mainMenuKeyboard(telegramUserId));
+      return true;
+    }
+    await bot.sendMessage(chatId, `Merci d'utiliser les boutons du clavier ci-dessous.`);
     return true;
   }
 
-  if (data === 'admin_support') {
-    resetSession(telegramUserId);
-    await bot.sendMessage(chatId, `🤝 *Gestion du Soutien*`, { parse_mode: 'Markdown', ...supportPanelKeyboard() });
+  if (screen === 'api') {
+    if (text === BACK_LABEL) {
+      await openAdminPanel(bot, chatId, telegramUserId);
+      return true;
+    }
+    if (text === '📊 Détails des clés') {
+      await showApiKeyStats(bot, chatId);
+      return true;
+    }
+    if (text === '➕ Ajouter une clé') {
+      setState(telegramUserId, 'ADMIN_WAITING_NEW_KEY', {});
+      await bot.sendMessage(chatId, `Envoyez la clé API Agnes :`, cancelKeyboard());
+      return true;
+    }
+    if (text === '🗑 Supprimer une clé') {
+      const keys = ApiKeyManager.listAll();
+      if (keys.length === 0) {
+        await bot.sendMessage(chatId, `Aucune clé à supprimer.`, apiMenuKeyboard());
+        return true;
+      }
+      setState(telegramUserId, 'ADMIN_WAITING_KEY_DELETE_SELECT', {});
+      await bot.sendMessage(chatId, `Sélectionnez la clé à supprimer :`, keyDeleteSelectKeyboard(keys));
+      return true;
+    }
+    await bot.sendMessage(chatId, `Merci d'utiliser les boutons du clavier ci-dessous.`);
     return true;
   }
-  if (data === 'support_info') {
-    setState(telegramUserId, 'ADMIN_SUPPORT_WAITING_INFO', {});
-    await bot.sendMessage(chatId, `Envoyez le nouveau texte d'information (affiché dans le menu Soutien) :`);
+
+  if (screen === 'ads') {
+    if (text === '➕ Ajouter une publicité') {
+      setState(telegramUserId, 'ADMIN_AD_WAITING_IMAGE', { adminScreen: 'ads' });
+      await bot.sendMessage(
+        chatId,
+        `Envoyez l'image de la publicité, ou "${SKIP_LABEL}" pour ne pas en mettre :`,
+        skipCancelKeyboard()
+      );
+      return true;
+    }
+
+    if (session.data.adsView === 'item' && session.data.selectedAdId) {
+      const ad = AdsService.getById(session.data.selectedAdId);
+      if (!ad) {
+        await renderAdsList(bot, chatId, telegramUserId);
+        return true;
+      }
+      if (text === BACK_TO_LIST_LABEL) {
+        await renderAdsList(bot, chatId, telegramUserId);
+        return true;
+      }
+      if (text === '🟢 Activer' || text === '🔴 Désactiver') {
+        AdsService.setActive(ad.id, ad.active ? 0 : 1);
+        await renderAdItem(bot, chatId, telegramUserId, ad.id);
+        return true;
+      }
+      if (text === '🗑 Supprimer') {
+        setState(telegramUserId, 'ADMIN_AD_DELETE_CONFIRM', { selectedAdId: ad.id });
+        await bot.sendMessage(
+          chatId,
+          `⚠️ Supprimer définitivement la publicité #${ad.id} ?`,
+          confirmCancelKeyboard()
+        );
+        return true;
+      }
+      if (text === '📣 Diffuser à tous') {
+        const total = db.prepare('SELECT COUNT(*) c FROM users').get().c;
+        setState(telegramUserId, 'ADMIN_AD_BROADCAST_CONFIRM', { selectedAdId: ad.id });
+        await bot.sendMessage(
+          chatId,
+          `⚠️ Envoyer cette publicité en message privé à ${total} utilisateur(s) et tenter de l'épingler chez chacun d'eux ?`,
+          confirmCancelKeyboard('✅ Diffuser maintenant')
+        );
+        return true;
+      }
+      await bot.sendMessage(chatId, `Merci d'utiliser les boutons du clavier ci-dessous.`);
+      return true;
+    }
+
+    // Vue liste (par défaut)
+    if (text === BACK_LABEL) {
+      await openAdminPanel(bot, chatId, telegramUserId);
+      return true;
+    }
+    const adId = extractId(text);
+    if (adId) {
+      await renderAdItem(bot, chatId, telegramUserId, adId);
+      return true;
+    }
+    await bot.sendMessage(chatId, `Merci d'utiliser les boutons du clavier ci-dessous.`);
     return true;
   }
-  if (data === 'support_sites') {
-    await listSites(bot, chatId);
-    return true;
-  }
-  if (data === 'site_add') {
-    setState(telegramUserId, 'ADMIN_SITE_WAITING_NAME', {});
-    await bot.sendMessage(chatId, `Nom du site :`);
-    return true;
-  }
-  if (data.startsWith('site_view_')) {
-    await viewSite(bot, chatId, parseInt(data.replace('site_view_', ''), 10));
-    return true;
-  }
-  if (data.startsWith('site_toggle_')) {
-    await toggleSite(bot, chatId, parseInt(data.replace('site_toggle_', ''), 10));
-    return true;
-  }
-  if (data.startsWith('site_delete_')) {
-    await deleteSite(bot, chatId, parseInt(data.replace('site_delete_', ''), 10));
-    return true;
-  }
-  if (data.startsWith('site_edit_')) {
-    await bot.sendMessage(chatId, `Pour modifier un site, supprimez-le puis recréez-le via ➕ Ajouter un site.`, supportPanelKeyboard());
-    return true;
+
+  if (screen === 'support') {
+    const view = session.data.supportView || 'menu';
+
+    if (view === 'menu') {
+      if (text === BACK_LABEL) {
+        await openAdminPanel(bot, chatId, telegramUserId);
+        return true;
+      }
+      if (text === "✏️ Modifier le texte d'info") {
+        setState(telegramUserId, 'ADMIN_SUPPORT_WAITING_INFO', {});
+        await bot.sendMessage(chatId, `Envoyez le nouveau texte d'information :`, cancelKeyboard());
+        return true;
+      }
+      if (text === '🌐 Gérer les sites') {
+        await renderSitesList(bot, chatId, telegramUserId);
+        return true;
+      }
+      await bot.sendMessage(chatId, `Merci d'utiliser les boutons du clavier ci-dessous.`);
+      return true;
+    }
+
+    if (view === 'sites-list') {
+      if (text === BACK_LABEL) {
+        setState(telegramUserId, 'ADMIN_IDLE', { adminScreen: 'support', supportView: 'menu' });
+        await bot.sendMessage(chatId, `🤝 <b>Gestion du Soutien</b>`, {
+          parse_mode: 'HTML',
+          ...supportMenuKeyboard()
+        });
+        return true;
+      }
+      if (text === '➕ Ajouter un site') {
+        setState(telegramUserId, 'ADMIN_SITE_WAITING_NAME', {});
+        await bot.sendMessage(chatId, `Nom du site :`, cancelKeyboard());
+        return true;
+      }
+      const siteId = extractId(text);
+      if (siteId) {
+        await renderSiteItem(bot, chatId, telegramUserId, siteId);
+        return true;
+      }
+      await bot.sendMessage(chatId, `Merci d'utiliser les boutons du clavier ci-dessous.`);
+      return true;
+    }
+
+    if (view === 'site-item' && session.data.selectedSiteId) {
+      const site = SupportService.getSite(session.data.selectedSiteId);
+      if (!site) {
+        await renderSitesList(bot, chatId, telegramUserId);
+        return true;
+      }
+      if (text === BACK_TO_LIST_LABEL) {
+        await renderSitesList(bot, chatId, telegramUserId);
+        return true;
+      }
+      if (text === '🟢 Activer' || text === '🔴 Désactiver') {
+        SupportService.updateSite(site.id, { active: site.active ? 0 : 1 });
+        await renderSiteItem(bot, chatId, telegramUserId, site.id);
+        return true;
+      }
+      if (text === '🗑 Supprimer') {
+        setState(telegramUserId, 'ADMIN_SITE_DELETE_CONFIRM', { selectedSiteId: site.id });
+        await bot.sendMessage(chatId, `⚠️ Supprimer le site "${site.name}" ?`, confirmCancelKeyboard());
+        return true;
+      }
+      await bot.sendMessage(chatId, `Merci d'utiliser les boutons du clavier ci-dessous.`);
+      return true;
+    }
   }
 
   return false;
@@ -463,7 +728,6 @@ async function handleAdminCallback(bot, query) {
 module.exports = {
   isAdmin,
   openAdminPanel,
-  handleAdminCallback,
   handleAdminTextInput,
   handleAdminPhotoInput
 };
