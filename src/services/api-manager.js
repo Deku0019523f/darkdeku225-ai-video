@@ -145,7 +145,17 @@ const ApiKeyManager = {
     const disabled = db
       .prepare(`SELECT COUNT(*) as c FROM api_keys WHERE status = 'disabled'`)
       .get().c;
-    return { total, available, limited, disabled };
+    const totals = db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(usage_count), 0) usage,
+           COALESCE(SUM(success_count), 0) success,
+           COALESCE(SUM(error_count), 0) errors,
+           COALESCE(SUM(rate_limit_count), 0) rateLimits
+         FROM api_keys`
+      )
+      .get();
+    return { total, available, limited, disabled, ...totals };
   }
 };
 

@@ -146,6 +146,33 @@ const VideoManager = {
       )
       .get().c;
 
+    // Nombre de générations terminées (succès ou échec) : base du taux de réussite
+    const resolvedCount = successCount + failedCount;
+    const successRate = resolvedCount > 0 ? (successCount / resolvedCount) * 100 : null;
+    const avgPerUser = totalUsers > 0 ? totalVideos / totalUsers : 0;
+
+    const avgGenerationRow = db
+      .prepare(
+        `SELECT AVG((julianday(completed_at) - julianday(created_at)) * 86400) a
+         FROM video_jobs
+         WHERE status = 'completed' AND completed_at IS NOT NULL`
+      )
+      .get();
+    const avgGenerationSeconds = avgGenerationRow.a ? Math.round(avgGenerationRow.a) : null;
+
+    const topStyles = db
+      .prepare(
+        `SELECT style, COUNT(*) c FROM video_jobs
+         WHERE style IS NOT NULL GROUP BY style ORDER BY c DESC LIMIT 3`
+      )
+      .all();
+    const topFormats = db
+      .prepare(
+        `SELECT format, COUNT(*) c FROM video_jobs
+         WHERE format IS NOT NULL GROUP BY format ORDER BY c DESC LIMIT 3`
+      )
+      .all();
+
     return {
       users: {
         total: totalUsers,
@@ -161,7 +188,12 @@ const VideoManager = {
         month: videosMonth,
         success: successCount,
         failed: failedCount,
-        pending: pendingCount
+        pending: pendingCount,
+        successRate,
+        avgPerUser,
+        avgGenerationSeconds,
+        topStyles,
+        topFormats
       }
     };
   }

@@ -12,7 +12,12 @@ const {
   handlePromptText,
   handleVideoCallback
 } = require('./handlers/video');
-const { openAdminPanel, handleAdminCallback, handleAdminTextInput } = require('./handlers/admin');
+const {
+  openAdminPanel,
+  handleAdminCallback,
+  handleAdminTextInput,
+  handleAdminPhotoInput
+} = require('./handlers/admin');
 const { getSession } = require('./utils/session');
 
 if (!config.telegram.token) {
@@ -51,8 +56,10 @@ bot.on('message', async (msg) => {
     upsertUser(msg.from);
     touchLastSeen(telegramUserId);
 
-    // Photos : gérées uniquement si l'utilisateur est dans l'étape WAITING_IMAGE
+    // Photos : d'abord pour l'admin (image de publicité), sinon pour le workflow vidéo
     if (msg.photo && msg.photo.length > 0) {
+      const handledByAdminPhoto = await handleAdminPhotoInput(bot, msg);
+      if (handledByAdminPhoto) return;
       await handlePhoto(bot, msg);
       return;
     }

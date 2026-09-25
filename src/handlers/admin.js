@@ -4,7 +4,7 @@ const ApiKeyManager = require('../services/api-manager');
 const VideoManager = require('../services/video-manager');
 const AdsService = require('../services/ads');
 const SupportService = require('../services/support');
-const { formatDate } = require('../utils/helpers');
+const { formatDate, escapeMarkdown, sendMarkdownSafe } = require('../utils/helpers');
 const {
   adminPanelKeyboard,
   apiPanelKeyboard,
@@ -32,31 +32,76 @@ async function openAdminPanel(bot, chatId, telegramUserId) {
 // ------------------------------------------------------------------
 // Statistiques
 // ------------------------------------------------------------------
+// ------------------------------------------------------------------
+// Mise en forme des statistiques (HTML : plus fiable que Markdown, pas
+// d'échappement à gérer pour des chiffres et libellés internes)
+// ------------------------------------------------------------------
+
+/** Barre de progression textuelle façon "██████░░░░ 62%". */
+function progressBar(percent, length = 10) {
+  const p = Math.max(0, Math.min(100, percent));
+  const filled = Math.round((p / 100) * length);
+  return '█'.repeat(filled) + '░'.repeat(length - filled) + ` ${Math.round(p)}%`;
+}
+
+function formatDuration(totalSeconds) {
+  if (totalSeconds === null || totalSeconds === undefined) return 'n/a';
+  if (totalSeconds < 60) return `${totalSeconds} s`;
+  const min = Math.floor(totalSeconds / 60);
+  const sec = totalSeconds % 60;
+  return `${min} min ${sec.toString().padStart(2, '0')} s`;
+}
+
+const STYLE_LABELS = {
+  cinematic: '🎬 Cinématique',
+  realistic: '📸 Réaliste',
+  artistic: '🎨 Artistique',
+  dynamic: '⚡ Dynamique',
+  anime: '🌌 Anime',
+  none: '✨ Aucun style'
+};
+const FORMAT_LABELS = { '9:16': '📱 9:16', '16:9': '🖥️ 16:9' };
+
+function formatTopList(rows, labels, key) {
+  if (!rows || rows.length === 0) return '  —';
+  return rows.map((r) => `  • ${labels[r[key]] || r[key]} — ${r.c}`).join('\n');
+}
+
 async function showStats(bot, chatId) {
   const stats = VideoManager.getStats();
   const apiStats = ApiKeyManager.getStats();
+  const u = stats.users;
+  const v = stats.videos;
+
+  const activeTodayPct = u.total > 0 ? (u.activeToday / u.total) * 100 : 0;
+  const successRateText =
+    v.successRate === null ? 'n/a (aucune génération terminée)' : `${v.successRate.toFixed(1)}%`;
+
   const text =
-    `📊 *Statistiques*\n\n` +
-    `👥 *UTILISATEURS*\n` +
-    `Total : ${stats.users.total}\n` +
-    `Nouveaux aujourd'hui : ${stats.users.newToday}\n` +
-    `Actifs aujourd'hui : ${stats.users.activeToday}\n` +
-    `Actifs cette semaine : ${stats.users.activeWeek}\n` +
-    `Actifs ce mois : ${stats.users.activeMonth}\n\n` +
-    `🎬 *VIDÉOS*\n` +
-    `Total des générations : ${stats.videos.total}\n` +
-    `Aujourd'hui : ${stats.videos.today}\n` +
-    `Cette semaine : ${stats.videos.week}\n` +
-    `Ce mois : ${stats.videos.month}\n\n` +
-    `✅ Réussies : ${stats.videos.success}\n` +
-    `❌ Échouées : ${stats.videos.failed}\n` +
-    `⏳ En cours : ${stats.videos.pending}\n\n` +
-    `🔑 *API*\n` +
-    `Nombre total de clés : ${apiStats.total}\n` +
-    `Clés disponibles : ${apiStats.available}\n` +
-    `Clés limitées : ${apiStats.limited}\n` +
-    `Clés désactivées : ${apiStats.disabled}`;
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...adminPanelKeyboard() });
+    `📊 <b>Tableau de bord</b>\n` +
+    `<i>Généré le ${formatDate(new Date().toISOString())}</i>\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `👥 <b>Utilisateurs</b>  (${u.total} au total)\n` +
+    `${progressBar(activeTodayPct)}  actifs aujourd'hui\n` +
+    `┌ Nouveaux aujourd'hui : <b>${u.newToday}</b>\n` +
+    `├ Actifs aujourd'hui   : <b>${u.activeToday}</b>\n` +
+    `├ Actifs 7 derniers j. : <b>${u.activeWeek}</b>\n` +
+    `└ Actifs 30 derniers j.: <b>${u.activeMonth}</b>\n\n` +
+    `🎬 <b>Vidéos</b>  (${v.total} générations)\n` +
+    `┌ Aujourd'hui : <b>${v.today}</b>   Semaine : <b>${v.week}</b>   Mois : <b>${v.month}</b>\n` +
+    `├ ✅ Réussies : <b>${v.success}</b>    ❌ Échouées : <b>${v.failed}</b>    ⏳ En cours : <b>${v.pending}</b>\n` +
+    `├ Taux de réussite : <b>${successRateText}</b>\n` +
+    `├ Moyenne / utilisateur : <b>${v.avgPerUser.toFixed(1)}</b> vidéo(s)\n` +
+    `└ Durée moyenne de génération : <b>${formatDuration(v.avgGenerationSeconds)}</b>\n\n` +
+    `🏆 <b>Styles les plus utilisés</b>\n${formatTopList(v.topStyles, STYLE_LABELS, 'style')}\n\n` +
+    `📐 <b>Formats les plus utilisés</b>\n${formatTopList(v.topFormats, FORMAT_LABELS, 'format')}\n\n` +
+    `🔑 <b>Clés API</b>  (${apiStats.total} au total)\n` +
+    `┌ 🟢 Disponibles : <b>${apiStats.available}</b>\n` +
+    `├ 🟠 Limitées    : <b>${apiStats.limited}</b>\n` +
+    `├ 🔴 Désactivées : <b>${apiStats.disabled}</b>\n` +
+    `└ Requêtes envoyées : <b>${apiStats.usage}</b> (dont ${apiStats.rateLimits} limitées)`;
+
+  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...adminPanelKeyboard() });
 }
 
 async function showApiKeyStats(bot, chatId) {
@@ -65,19 +110,20 @@ async function showApiKeyStats(bot, chatId) {
     await bot.sendMessage(chatId, `Aucune clé API enregistrée pour le moment.`, apiPanelKeyboard());
     return;
   }
-  let text = `🔑 *Statistiques par clé*\n\n`;
+
+  const stateIcons = { active: '🟢', limited: '🟠', disabled: '🔴' };
+  let text = `🔑 <b>Détail par clé API</b>\n━━━━━━━━━━━━━━━━━━━━\n\n`;
   for (const k of keys) {
-    const stateIcon = k.status === 'active' ? '🟢' : k.status === 'limited' ? '🟠' : '🔴';
+    const icon = stateIcons[k.status] || '⚪️';
+    const errorRate = k.usage_count > 0 ? (k.error_count / k.usage_count) * 100 : 0;
     text +=
-      `🔑 API #${k.id}\n` +
-      `État : ${stateIcon} ${k.status}\n` +
-      `Utilisations : ${k.usage_count}\n` +
-      `Succès : ${k.success_count}\n` +
-      `Erreurs : ${k.error_count}\n` +
-      `Limites : ${k.rate_limit_count}\n` +
-      `Dernière utilisation : ${formatDate(k.last_used_at)}\n\n`;
+      `${icon} <b>API #${k.id}</b>  <code>${k.masked_key}</code>\n` +
+      `┌ Statut : <b>${k.status}</b>\n` +
+      `├ Utilisations : <b>${k.usage_count}</b>  (✅ ${k.success_count} · ❌ ${k.error_count} · 🚫 ${k.rate_limit_count})\n` +
+      `├ Taux d'erreur : <b>${errorRate.toFixed(1)}%</b>\n` +
+      `└ Dernière utilisation : ${formatDate(k.last_used_at)}\n\n`;
   }
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...apiPanelKeyboard() });
+  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...apiPanelKeyboard() });
 }
 
 // ------------------------------------------------------------------
@@ -129,6 +175,17 @@ async function handleAdminTextInput(bot, msg) {
         await bot.sendMessage(chatId, `✅ Clé ajoutée avec succès.\n🔑 API #${key.id} ${key.masked_key}`, apiPanelKeyboard());
       } catch (err) {
         await bot.sendMessage(chatId, `❌ ${err.message}`);
+      }
+      return true;
+    }
+    case 'ADMIN_AD_WAITING_IMAGE': {
+      // Cette étape attend normalement une photo (voir handleAdminPhotoInput) ; si
+      // l'admin envoie du texte ici, seul "-" (passer) est accepté.
+      if (text === '-') {
+        setState(telegramUserId, 'ADMIN_AD_WAITING_MESSAGE', { adImage: null });
+        await bot.sendMessage(chatId, `Message de la publicité :`);
+      } else {
+        await bot.sendMessage(chatId, `Envoyez une photo, ou "-" pour ne pas mettre d'image.`);
       }
       return true;
     }
@@ -209,7 +266,13 @@ async function listAds(bot, chatId) {
   for (const ad of ads) {
     const stateLabel = ad.active ? '🟢 Active' : '🔴 Inactive';
     const text = `📢 Publicité #${ad.id} — ${stateLabel}\n\n${ad.message}${ad.url ? `\n🔗 ${ad.url}` : ''}`;
-    await bot.sendMessage(chatId, text, adItemKeyboard(ad));
+    if (ad.image) {
+      await bot.sendPhoto(chatId, ad.image, { caption: text, ...adItemKeyboard(ad) }).catch(
+        () => bot.sendMessage(chatId, text, adItemKeyboard(ad))
+      );
+    } else {
+      await bot.sendMessage(chatId, text, adItemKeyboard(ad));
+    }
   }
 }
 
@@ -240,13 +303,13 @@ async function viewSite(bot, chatId, id) {
   const site = SupportService.getSite(id);
   if (!site) return;
   const text =
-    `🌐 *${site.name}*\n\n` +
-    `${site.description || ''}\n` +
-    `🔗 ${site.url}\n` +
-    `Bouton : ${site.button_text}\n` +
+    `🌐 *${escapeMarkdown(site.name)}*\n\n` +
+    `${escapeMarkdown(site.description || '')}\n` +
+    `🔗 ${escapeMarkdown(site.url)}\n` +
+    `Bouton : ${escapeMarkdown(site.button_text)}\n` +
     `Position : ${site.position}\n` +
     `Statut : ${site.active ? '🟢 Actif' : '🔴 Inactif'}`;
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...siteItemKeyboard(site) });
+  await sendMarkdownSafe(bot, chatId, text, siteItemKeyboard(site));
 }
 
 async function toggleSite(bot, chatId, id) {
@@ -259,6 +322,23 @@ async function toggleSite(bot, chatId, id) {
 async function deleteSite(bot, chatId, id) {
   SupportService.removeSite(id);
   await bot.sendMessage(chatId, `🗑 Site supprimé.`, supportPanelKeyboard());
+}
+
+// ------------------------------------------------------------------
+// Réception d'une photo (utilisée pour l'image d'une publicité)
+// ------------------------------------------------------------------
+async function handleAdminPhotoInput(bot, msg) {
+  const telegramUserId = msg.from.id;
+  const chatId = msg.chat.id;
+  if (!isAdmin(telegramUserId)) return false;
+  const session = getSession(telegramUserId);
+  if (session.state !== 'ADMIN_AD_WAITING_IMAGE') return false;
+
+  const photos = msg.photo;
+  const best = photos[photos.length - 1];
+  setState(telegramUserId, 'ADMIN_AD_WAITING_MESSAGE', { adImage: best.file_id });
+  await bot.sendMessage(chatId, `Message de la publicité :`);
+  return true;
 }
 
 // ------------------------------------------------------------------
@@ -320,8 +400,8 @@ async function handleAdminCallback(bot, query) {
     return true;
   }
   if (data === 'ads_add') {
-    setState(telegramUserId, 'ADMIN_AD_WAITING_MESSAGE', {});
-    await bot.sendMessage(chatId, `Envoyez le message de la publicité (l'image pourra être envoyée ensuite via une photo si besoin) :`);
+    setState(telegramUserId, 'ADMIN_AD_WAITING_IMAGE', {});
+    await bot.sendMessage(chatId, `Envoyez l'image de la publicité, ou "-" pour ne pas en mettre :`);
     return true;
   }
   if (data === 'ads_list') {
@@ -384,5 +464,6 @@ module.exports = {
   isAdmin,
   openAdminPanel,
   handleAdminCallback,
-  handleAdminTextInput
+  handleAdminTextInput,
+  handleAdminPhotoInput
 };
