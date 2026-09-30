@@ -18,6 +18,13 @@ const config = {
     requiredChannelUsername: required('REQUIRED_CHANNEL_USERNAME', 'Deku225_Master'),
     requiredChannelLink: required('REQUIRED_CHANNEL_LINK', 'https://t.me/Deku225_Master')
   },
+  webapp: {
+    // URL publique HTTPS où la Mini App est servie (ex: https://video.premium225.shop)
+    url: required('WEBAPP_URL'),
+    port: parseInt(required('PORT', '3000'), 10),
+    // Fenêtre de validité des données signées par Telegram (initData), en secondes
+    initDataMaxAgeSeconds: parseInt(required('WEBAPP_INITDATA_MAX_AGE', '86400'), 10)
+  },
   agnes: {
     model: required('AGNES_MODEL', 'agnes-video-v2.0'),
     baseUrl: required('AGNES_BASE_URL', 'https://apihub.agnes-ai.com'),
@@ -37,13 +44,10 @@ const config = {
   },
   tempDir: path.resolve(process.cwd(), required('TEMP_DIR', './temp')),
 
-  // Correspondances format -> résolution.
-  // Agnes "normalise" toute taille vers le préset le plus proche : il faut donc envoyer de
-  // vraies proportions 9:16 / 16:9 (multiples de 64, palier 720p). 768x1152 (2:3) était
-  // ramené à 3:4 au lieu de 9:16. Pour des vidéos plus rapides : 448x832 / 832x448 (480p).
+  // Correspondances format -> résolution (cohérentes avec les ratios 16:9 et 9:16)
   formats: {
-    '9:16': { width: 704, height: 1280, label: '📱 9:16 (vertical)' },
-    '16:9': { width: 1280, height: 704, label: '🖥️ 16:9 (horizontal)' }
+    '9:16': { width: 768, height: 1152, label: '📱 9:16 (vertical)' },
+    '16:9': { width: 1152, height: 768, label: '🖥️ 16:9 (horizontal)' }
   },
 
   // Durée -> num_frames, en respectant num_frames = 8n + 1 et num_frames <= 441

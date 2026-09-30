@@ -1,6 +1,5 @@
 const db = require('../database');
 const config = require('../config');
-const { mainMenuKeyboard } = require('../keyboards/main');
 const logger = require('../utils/logger');
 
 function upsertUser(from) {
@@ -26,16 +25,4 @@ function touchLastSeen(telegramUserId) {
   );
 }
 
-async function handleStart(bot, msg) {
-  const user = upsertUser(msg.from);
-  const welcome =
-    `🎬 *Bienvenue sur Darkdeku225 AI Video*\n\n` +
-    `Transformez une simple image en vidéo animée grâce à l'intelligence artificielle.\n\n` +
-    `Utilisez le menu ci-dessous pour commencer, ou appuyez sur *ℹ️ Aide* pour tout savoir sur le fonctionnement du bot.`;
-  await bot.sendMessage(msg.chat.id, welcome, {
-    parse_mode: 'Markdown',
-    ...mainMenuKeyboard(user.telegram_id)
-  });
-}
-
-module.exports = { handleStart, upsertUser, touchLastSeen };
+module.exports = { upsertUser, touchLastSeen };
