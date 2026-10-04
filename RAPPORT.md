@@ -4,125 +4,188 @@
 
 ## Objectif du projet
 
-Bot Telegram professionnel, gratuit pour les utilisateurs, qui transforme une image envoyée par
-l'utilisateur en vidéo animée à partir d'un prompt textuel, via l'API **Agnes AI**
+Telegram **Mini App** (pivot depuis un bot 100% chat) qui transforme une image envoyée
+par l'utilisateur en vidéo animée à partir d'un prompt textuel, via l'API **Agnes AI**
 (modèle `agnes-video-v2.0`). Accès conditionné à l'abonnement au canal `@Deku225_Master`.
+Le panel admin est lui aussi en Mini App.
 
 ## Stack et technologies
 
-- Node.js (>=18, `fetch` natif utilisé pour les appels HTTP)
-- `node-telegram-bot-api` (polling)
+- Node.js (>=18, `fetch` natif)
+- `node-telegram-bot-api` (bot minimal, polling, juste `/start`)
+- `express` (serveur HTTP : sert la Mini App + API REST)
 - `better-sqlite3` (SQLite synchrone)
 - `dotenv`
+- Frontend : HTML/CSS/JS vanilla (pas de framework/bundler), SDK `telegram-web-app.js`
 - PM2 pour l'exécution en production
 
 ## Architecture et structure des fichiers
 
-Voir `plan.md` pour le détail exhaustif. Résumé :
+Voir `plan.md` pour le détail exhaustif. Résumé du pivot Mini App :
 
-- `src/bot.js` : point d'entrée, branchement des handlers (message, callback_query, polling_error)
-- `src/config.js` : configuration centrale (formats, durées, styles, .env)
-- `src/database.js` : schéma SQLite auto-initialisé (7 tables)
-- `src/handlers/` : `start.js`, `video.js` (machine à états du workflow), `help.js`, `support.js`, `admin.js`
-- `src/services/` : `agnes.js` (couche d'abstraction API), `api-manager.js` (rotation des clés),
-  `video-manager.js` (CRUD jobs + stats), `cooldown.js`, `membership.js`, `ads.js`, `support.js`
-- `src/keyboards/` : `main.js`, `video.js`, `admin.js`
-- `src/utils/` : `logger.js`, `helpers.js` (chiffrement AES-256-GCM, calcul num_frames), `session.js`
-  (état de conversation par utilisateur, en mémoire, aucune variable globale partagée)
+- `src/index.js` : **nouveau point d'entrée unique** — initialise la DB, démarre le bot
+  et le serveur Express dans le même process
+- `src/bot.js` : **réduit au strict minimum** — configure le menu button Telegram
+  (`web_app`) et répond à `/start` avec un bouton "Ouvrir" vers `WEBAPP_URL`
+- `src/server.js` : serveur Express — sert `public/` (frontend statique) + monte
+  `/api`, `/api/video`, `/api/admin`
+- `src/webapp-auth.js` : **nouveau** — valide cryptographiquement `initData` (HMAC-SHA256,
+  algorithme officiel Telegram), attache `req.telegramUser`, vérifie l'admin
+- `src/routes/common.js`, `video.js`, `admin.js` : **nouveaux** — endpoints REST qui
+  remplacent les anciens handlers de chat (`video.js`, `admin.js`, `help.js`, `support.js`
+  ont été **supprimés**, ainsi que `keyboards/*` et `utils/session.js`, devenus inutiles)
+- `src/services/video-workflow.js` : **nouveau** — extrait les fonctions pures
+  (`buildFinalPrompt`, `resolveFormat`, `resolveDuration`) qui étaient auparavant dans le
+  handler de chat, réutilisées par `routes/video.js`
+- `src/services/video-manager.js` : **complété** — deux caches en mémoire (`progressCache`,
+  `adCache`) exposés via `setProgress/getProgress/setAd/getAd`, consommés par
+  `routes/video.js` pour le polling de job depuis la Mini App
+- `src/services/*` (agnes, api-manager, cooldown, membership, ads, support) : **inchangés**
+  — la bascule Mini App ne touche à aucune logique métier
+- `public/index.html`, `app.js`, `styles.css` : **nouveau frontend** — toutes les vues
+  dans un seul index.html (écrans togglés en JS), thème clair/sombre adaptatif via les
+  CSS vars `--tg-theme-*`
 
 ## Fonctionnalités développées
 
-- [x] Workflow complet de création vidéo (machine à états : WAITING_IMAGE → WAITING_PROMPT →
-      WAITING_FORMAT → WAITING_STYLE → WAITING_DURATION → CONFIRMATION → GENERATING)
-- [x] Vérification réelle de l'abonnement au canal (getChatMember, statuts member/administrator/creator)
-- [x] Rotation intelligente des clés API Agnes (round-robin, cooldown automatique sur 429/quota)
-- [x] Chiffrement AES-256-GCM des clés Agnes stockées en SQLite, masquage à l'affichage
-- [x] Cooldown individuel de 20 secondes, persisté en SQLite
-- [x] Construction du prompt enrichi (prompt utilisateur + suffixe de style, sans destruction)
-- [x] Format Auto basé sur les proportions réelles de l'image envoyée (largeur/hauteur Telegram)
-- [x] Durée Auto = 5 secondes par défaut, respect strict de `num_frames = 8n+1` et `<= 441`
-- [x] Récapitulatif avant génération + édition des paramètres sans recommencer
-- [x] Polling Agnes avec intervalle raisonnable et nombre max de tentatives (timeout géré)
-- [x] Gestion d'erreurs générique côté utilisateur, détail technique uniquement dans les logs
-- [x] Panel admin : statistiques (utilisateurs + vidéos + API détaillé par clé)
-- [x] Panel admin : gestion des clés API (ajout, suppression avec confirmation)
-- [x] Panel admin : gestion des publicités (ajout via wizard texte, activer/désactiver, suppression,
-      affichage périodique selon fréquence configurable)
-- [x] Panel admin : gestion du Soutien (texte d'info + sites dynamiques, non codés en dur)
-- [x] Aide utilisateur détaillée et professionnelle
-- [x] Logs INFO/WARN/ERROR sans jamais logger de clé API complète
-- [x] Structure PM2 (`ecosystem.config.js`) + scripts npm
+- [x] Pivot complet chat → Mini App (décision utilisateur : `/start` ouvre uniquement la
+      Mini App, plus de ReplyKeyboard/menu texte ; panel admin aussi en Mini App)
+- [x] Authentification Telegram native via validation `initData` (HMAC-SHA256)
+- [x] Écran d'accueil avec statut (abonnement, cooldown, disponibilité clés)
+- [x] Wizard de création vidéo en Mini App : upload image (FileReader + aperçu),
+      prompt, format (avec auto-détection via les dimensions réelles de l'image),
+      style (optionnel), durée (optionnelle), récapitulatif, génération
+- [x] Suivi de progression en direct (polling `/api/video/job/:id` toutes les 2,5s)
+- [x] Vidéo affichée dans la Mini App (`<video>`) **et** renvoyée dans le chat Telegram
+      via `bot.sendVideo()` pour persistance après fermeture de l'app
+- [x] Panel admin en Mini App : onglets Statistiques / API / Ads / Soutien, avec
+      ajout/suppression de clés, ajout/activation/désactivation/suppression de pubs et
+      de sites de soutien
+- [x] Toutes les vérifications de sécurité côté serveur (abonnement, cooldown, clé
+      disponible, admin) — jamais fait confiance au seul affichage côté client
+- [x] Gestion d'erreurs propre (codes HTTP dédiés : 403 abonnement requis, 429 cooldown,
+      503 aucune clé, messages génériques côté utilisateur)
+- [x] Statistiques admin étendues : taux de réussite et temps moyen de génération affichés
+      dans l'onglet Statistiques de la Mini App (`avgPerUser`, `topStyles`, `topFormats`
+      restent disponibles via `/api/admin/stats` mais pas encore affichés côté frontend)
 
 ## Fonctionnalités restantes / simplifications à améliorer plus tard
 
-- Modification (edit) d'une publicité ou d'un site existant : actuellement il faut supprimer puis
-  recréer (pas de wizard d'édition en place) — à améliorer si besoin.
-- L'ajout d'une image à une publicité depuis le wizard texte n'est pas encore branché (le champ
-  `image` existe en base et dans `AdsService`, mais le wizard actuel ne demande pas de photo) —
-  prévoir un état `ADMIN_AD_WAITING_IMAGE` avec écoute d'un message photo si souhaité.
-- Pas de file d'attente explicite (queue) pour la concurrence : chaque génération tourne dans sa
-  propre promesse asynchrone ; suffisant pour un usage modéré, à surveiller en charge élevée.
-- Pas de suppression automatique programmée des vieux fichiers dans `temp/` (nettoyage fait au cas
-  par cas après chaque génération, mais pas de tâche de nettoyage périodique).
+- Édition d'une publicité ou d'un site existant se fait encore via suppression +
+  recréation côté logique (mais l'UI Mini App pourrait gagner un vrai formulaire d'édition
+  inline plus tard).
+- Pas de compression/redimensionnement de l'image côté client avant envoi en base64 —
+  pour de grosses photos (>10 Mo), le payload JSON peut devenir lourd ; envisager de
+  redimensionner via `<canvas>` côté frontend avant upload si ça pose problème en usage
+  réel.
+- Le lien "Créer une Mini App nommée" via `@BotFather` `/newapp` (accès direct
+  `t.me/<bot>/<app>`) n'est pas automatisé — à faire manuellement une fois si souhaité,
+  en plus du Menu Button déjà couvert par le code.
+- Toujours en suspens depuis la V1 chat : confirmer le format exact attendu par Agnes
+  pour le champ `image` (URL vs base64 — actuellement en base64 data URI).
+- Toujours en suspens : modèle `agnes-video-v2.0` retiré le 25/09/2026, migration à
+  faire vers un modèle successeur (voir échange précédent sur les limites de durée des
+  modèles 2.5/2.5-flash, qui sont en réalité plus courtes que v2.0).
+- L'écran admin "Statistiques" affiche maintenant le taux de réussite et le temps moyen
+  de génération en plus des champs de base ; `avgPerUser`, `topStyles` et `topFormats`
+  restent disponibles côté API (`/api/admin/stats`) mais pas encore affichés côté Mini
+  App — à ajouter dans `loadAdminStats()` si souhaité.
 
 ## Modifications importantes effectuées
 
-- Version initiale complète livrée le 24/09/2026 (voir date du build), puis poussée sur GitHub
-  (`Deku0019523f/darkdeku225-ai-video`, dépôt public).
+- Version initiale (bot 100% chat) livrée et poussée sur GitHub le 24/09/2026.
+- **Pivot Mini App** : réécriture complète de la couche de présentation (chat →
+  interface web intégrée), services métier conservés à l'identique. Fichiers de chat
+  obsolètes supprimés (`handlers/video.js`, `handlers/admin.js`, `handlers/help.js`,
+  `handlers/support.js`, `keyboards/*`, `utils/session.js`).
+- Le pivot a été réalisé en deux temps (reprise après réinitialisation de
+  l'environnement de build) : une première partie (suppression des fichiers obsolètes,
+  `bot.js`, `config.js`, `index.js`, `handlers/start.js`) avait déjà été poussée sur
+  GitHub ; cette session a complété le reste (`webapp-auth.js`, `server.js`,
+  `routes/*`, `services/video-workflow.js`, cache progress/ad dans `video-manager.js`,
+  tout le frontend `public/`, et les mises à jour `package.json`/`.env.example`/
+  `ecosystem.config.js`/README/RAPPORT/plan).
+- En parallèle de ce pivot, une autre session a apporté plusieurs correctifs à la
+  version V1 (chat) avant sa suppression : passage à un ReplyKeyboard, diffusion des
+  publicités, affichage HTML/graphiques en barres des statistiques, correctifs de
+  proportion d'image, échappement Markdown. Ces correctifs n'ont plus d'effet une fois
+  le chat remplacé par la Mini App, mais deux ajouts utiles qu'ils contenaient ont été
+  conservés et sont toujours actifs : les champs statistiques étendus de
+  `VideoManager.getStats()` (`successRate`, `avgPerUser`, `avgGenerationSeconds`,
+  `topStyles`, `topFormats`, exposés via `/api/admin/stats`) et les fonctions utilitaires
+  `escapeMarkdown`/`escapeHtml`/`sendMarkdownSafe` dans `src/utils/helpers.js` — ces
+  trois dernières ne sont plus appelées nulle part après la suppression des handlers de
+  chat ; elles sont laissées en place (code mort, sans risque) plutôt que supprimées
+  unilatéralement, à nettoyer plus tard si confirmé inutile.
 
 ## Problèmes rencontrés et solutions
 
-- **Ambiguïté sur le format attendu par Agnes pour le champ `image`** : la doc fournie ne précise
-  pas si Agnes attend une URL publique ou une image encodée en base64. Choix fait : téléchargement
-  de l'image Telegram côté serveur puis envoi en `data:image/jpeg;base64,...`. Si Agnes attend en
-  réalité une URL hébergée, il faudra adapter `handlePhoto()` (src/handlers/video.js) pour héberger
-  l'image quelque part (ex: petit serveur statique ou stockage objet) et passer l'URL à la place.
-- **Modèle Agnes retiré le 25/09/2026** : isolé entièrement dans `src/services/agnes.js` +
-  `AGNES_MODEL` en `.env`, comme demandé, pour permettre une migration sans réécrire le bot.
-- Création initiale du dépôt GitHub échouée via l'intégration connectée (403 « Resource not
-  accessible by integration ») : le dépôt a été créé manuellement par Alec, puis le code a été
-  poussé via push_files.
-- Pas d'accès réseau dans l'environnement de build : les dépendances npm n'ont pas pu être
-  installées ni testées en conditions réelles ici. Tous les fichiers ont été validés avec
-  `node --check` (syntaxe correcte), mais un test d'exécution réel (`npm install && npm start`)
-  reste à faire côté utilisateur.
+- **Progression numérique et publicités non persistées en base** : le schéma SQLite
+  `video_jobs` n'a pas de colonne `progress`, et les pubs étaient choisies à la volée
+  dans le handler de chat. Solution : deux caches en mémoire dans
+  `src/services/video-manager.js` (`progressCache`, `adCache`), suffisants puisque ces
+  données sont éphémères (le temps que la Mini App poll le job), sans toucher au schéma.
+- **Sécurité initData** : implémentation stricte de l'algorithme officiel Telegram
+  (tri des clés, HMAC-SHA256 en deux passes, vérification de fraîcheur via `auth_date`)
+  dans `src/webapp-auth.js`, plutôt qu'une vérification approximative.
+- **Réinitialisation de l'environnement de build en cours de pivot** : une partie du
+  travail (fichiers serveur/routes/frontend) avait été écrite mais pas encore poussée
+  sur GitHub lorsque l'environnement local a été recyclé. Solution : le dépôt GitHub a
+  été reclôné pour repartir de l'état réellement poussé, et les fichiers manquants ont
+  été réécrits à l'identique à partir du contenu déjà connu, plutôt que de supposer leur
+  présence. Leçon retenue : pousser sur GitHub au fur et à mesure plutôt qu'en un seul
+  lot en fin de tâche, pour limiter la perte de travail en cas de redémarrage.
+- Pas d'accès réseau dans l'environnement de build : dépendances npm non installées ni
+  testées en conditions réelles ici (idem pour la V1). Tous les fichiers validés avec
+  `node --check`.
 
 ## Dépendances installées
 
-`better-sqlite3`, `dotenv`, `node-telegram-bot-api` (voir `package.json`). Non installées dans cet
-environnement de build (pas d'accès réseau) — à faire avec `npm install` côté utilisateur.
+`better-sqlite3`, `dotenv`, `express`, `node-telegram-bot-api` (voir `package.json`).
+Non installées dans cet environnement de build (pas d'accès réseau) — `npm install`
+côté utilisateur.
 
 ## Commandes importantes
 
 ```bash
 npm install
-cp .env.example .env      # puis remplir les valeurs
-npm start                 # lancement simple
+cp .env.example .env      # puis remplir les valeurs, notamment WEBAPP_URL (HTTPS)
+npm start                 # lancement simple (bot + serveur dans le même process)
 pm2 start ecosystem.config.js   # lancement production
 pm2 logs darkdeku225-ai-video
 ```
 
 ## Variables d'environnement nécessaires
 
-Voir `.env.example` (aucune clé/mot de passe réel n'est stocké dans ce dépôt) :
-`TELEGRAM_BOT_TOKEN`, `ADMIN_ID`, `REQUIRED_CHANNEL_USERNAME`, `REQUIRED_CHANNEL_LINK`,
-`AGNES_MODEL`, `AGNES_BASE_URL`, `AGNES_CREATE_PATH`, `AGNES_RESULT_PATH`, `ENCRYPTION_KEY`,
-`GENERATION_COOLDOWN_SECONDS`, `AGNES_POLL_INTERVAL_MS`, `AGNES_POLL_MAX_ATTEMPTS`,
-`DATABASE_PATH`, `TEMP_DIR`.
+Voir `.env.example` : `TELEGRAM_BOT_TOKEN`, `ADMIN_ID`, `REQUIRED_CHANNEL_USERNAME`,
+`REQUIRED_CHANNEL_LINK`, **`WEBAPP_URL`** (nouveau, HTTPS obligatoire), **`PORT`**
+(nouveau), **`WEBAPP_INITDATA_MAX_AGE`** (nouveau), `AGNES_MODEL`, `AGNES_BASE_URL`,
+`AGNES_CREATE_PATH`, `AGNES_RESULT_PATH`, `ENCRYPTION_KEY`, `GENERATION_COOLDOWN_SECONDS`,
+`AGNES_POLL_INTERVAL_MS`, `AGNES_POLL_MAX_ATTEMPTS`, `DATABASE_PATH`, `TEMP_DIR` (plus
+vraiment utilisé côté Mini App, conservé pour compatibilité).
 
 ## État actuel du projet
 
-Code complet et cohérent livré, syntaxe validée (`node --check` sur tous les fichiers), poussé sur
-GitHub (dépôt public `darkdeku225-ai-video`). Non testé en conditions réelles (pas d'accès réseau
-dans l'environnement de build) : à tester par l'utilisateur avec un vrai token Telegram et de
-vraies clés Agnes avant mise en production.
+Pivot Mini App complet et cohérent, syntaxe validée (`node --check` sur tous les
+fichiers JS, backend et frontend), **et intégralement poussé sur GitHub**
+(`Deku0019523f/darkdeku225-ai-video`, branche `main`). Non testé en conditions réelles
+(pas d'accès réseau dans l'environnement de build, et un vrai domaine HTTPS + BotFather
+sont nécessaires pour tester une Mini App) : à tester par l'utilisateur, qui a confirmé
+avoir déjà un domaine + HTTPS prêts sur son VPS.
 
 ## Prochaines étapes à réaliser
 
-1. Cloner le dépôt, `npm install` puis renseigner `.env` avec un vrai token et générer `ENCRYPTION_KEY`.
-2. Ajouter au moins une clé Agnes via le panel admin (`👑 Admin > 🔑 API > ➕ Ajouter une clé`).
-3. Vérifier que le bot est bien administrateur du canal `@Deku225_Master`.
-4. Tester le workflow complet de bout en bout avec une vraie image et un vrai prompt.
-5. Confirmer le format exact attendu par Agnes pour le champ `image` (URL vs base64) et ajuster si
-   besoin (voir section "Problèmes rencontrés").
-6. Configurer les sites de soutien et le texte d'information depuis le panel admin.
+1. `npm install`, renseigner `.env` (notamment `WEBAPP_URL` avec le domaine HTTPS déjà
+   prêt) et générer `ENCRYPTION_KEY`.
+2. Mettre le reverse-proxy (nginx/Caddy) en place devant `PORT` pour exposer `WEBAPP_URL`
+   en HTTPS valide.
+3. Dans BotFather : `/mybots` → Bot Settings → Menu Button → coller `WEBAPP_URL`.
+4. Lancer le bot (`npm start` ou PM2), ouvrir `/start` dans Telegram et vérifier que le
+   bouton "Ouvrir" lance bien la Mini App.
+5. Ajouter au moins une clé Agnes depuis l'onglet 🔑 API du panel admin de la Mini App.
+6. Vérifier que le bot est bien administrateur du canal `@Deku225_Master`.
+7. Tester le workflow complet de bout en bout (image, prompt, génération, réception de
+   la vidéo dans la Mini App et dans le chat).
+8. Configurer les sites de soutien et le texte d'information depuis l'onglet 🤝 Soutien.
+9. (Optionnel) Afficher `avgPerUser`, `topStyles`, `topFormats` dans l'écran admin de la
+   Mini App, en plus de `successRate`/`avgGenerationSeconds` déjà affichés.
