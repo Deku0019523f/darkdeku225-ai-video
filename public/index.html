@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Darkdeku225 AI Video</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<div id="app">
+
+  <section id="screen-loading" class="screen active">
+    <div class="center-box">
+      <div class="spinner"></div>
+      <p>Chargement...</p>
+    </div>
+  </section>
+
+  <section id="screen-channel" class="screen">
+    <div class="center-box">
+      <h2>📢 Abonnement requis</h2>
+      <p>Pour utiliser Darkdeku225 AI Video gratuitement, vous devez rejoindre notre canal officiel.</p>
+      <a id="channel-join-link" class="btn btn-primary" target="_blank" rel="noopener">📢 Rejoindre le canal</a>
+      <button id="channel-verify-btn" class="btn btn-secondary">✅ Vérifier mon abonnement</button>
+    </div>
+  </section>
+
+  <section id="screen-home" class="screen">
+    <header class="app-header">
+      <h1>🎬 Darkdeku225 AI Video</h1>
+      <p class="subtitle">Transformez une image en vidéo animée par IA</p>
+    </header>
+    <div class="menu-grid">
+      <button id="home-create-btn" class="menu-card">🎬<span>Créer une vidéo</span></button>
+      <button id="home-help-btn" class="menu-card">ℹ️<span>Aide</span></button>
+      <button id="home-support-btn" class="menu-card">🤝<span>Soutien</span></button>
+      <button id="home-admin-btn" class="menu-card admin-only" hidden>👑<span>Admin</span></button>
+    </div>
+    <p id="home-status-note" class="note"></p>
+  </section>
+
+  <section id="screen-wizard" class="screen">
+    <header class="step-header">
+      <button class="back-btn" data-back>←</button>
+      <h2 id="wizard-title">Créer une vidéo</h2>
+    </header>
+
+    <div id="wizard-step-image" class="wizard-step">
+      <p class="step-label">🖼️ Envoyez l'image à transformer en vidéo</p>
+      <input id="image-input" type="file" accept="image/*" />
+      <img id="image-preview" class="image-preview" hidden />
+      <button id="image-next-btn" class="btn btn-primary" disabled>Continuer</button>
+    </div>
+
+    <div id="wizard-step-prompt" class="wizard-step" hidden>
+      <p class="step-label">✍️ Décrivez ce qui doit se produire dans la vidéo</p>
+      <textarea id="prompt-input" rows="4" placeholder="Ex : La personne marche lentement vers la caméra, ses cheveux bougent avec le vent, mouvement de caméra cinématographique..."></textarea>
+      <button id="prompt-next-btn" class="btn btn-primary">Continuer</button>
+    </div>
+
+    <div id="wizard-step-format" class="wizard-step" hidden>
+      <p class="step-label">📐 Choisissez le format</p>
+      <div class="choice-grid">
+        <button class="choice-btn" data-format="9:16">📱<span>9:16</span></button>
+        <button class="choice-btn" data-format="16:9">🖥️<span>16:9</span></button>
+        <button class="choice-btn" data-format="auto">🤖<span>Auto</span></button>
+      </div>
+    </div>
+
+    <div id="wizard-step-style" class="wizard-step" hidden>
+      <p class="step-label">✨ Voulez-vous ajouter un style ? (optionnel)</p>
+      <div class="choice-grid" id="style-grid"></div>
+    </div>
+
+    <div id="wizard-step-duration" class="wizard-step" hidden>
+      <p class="step-label">⏱️ Choisissez la durée (optionnel)</p>
+      <div class="choice-grid">
+        <button class="choice-btn" data-duration="3">⚡<span>3s</span></button>
+        <button class="choice-btn" data-duration="5">🎬<span>5s</span></button>
+        <button class="choice-btn" data-duration="10">🔥<span>10s</span></button>
+        <button class="choice-btn" data-duration="18">🚀<span>18s</span></button>
+        <button class="choice-btn" data-duration="auto">🤖<span>Auto</span></button>
+      </div>
+    </div>
+
+    <div id="wizard-step-recap" class="wizard-step" hidden>
+      <p class="step-label">🎬 Récapitulatif</p>
+      <div class="recap-box">
+        <img id="recap-image" class="recap-image" />
+        <p><strong>✍️ Prompt :</strong> <span id="recap-prompt"></span></p>
+        <p><strong>📐 Format :</strong> <span id="recap-format"></span></p>
+        <p><strong>✨ Style :</strong> <span id="recap-style"></span></p>
+        <p><strong>⏱️ Durée :</strong> <span id="recap-duration"></span></p>
+      </div>
+      <button id="recap-generate-btn" class="btn btn-primary">🚀 Générer la vidéo</button>
+      <button id="recap-edit-btn" class="btn btn-secondary">✏️ Modifier</button>
+      <button id="recap-cancel-btn" class="btn btn-danger">❌ Annuler</button>
+    </div>
+  </section>
+
+  <section id="screen-generating" class="screen">
+    <div class="center-box">
+      <div class="spinner"></div>
+      <p id="generating-text">⏳ Préparation de votre vidéo...</p>
+    </div>
+  </section>
+
+  <section id="screen-result" class="screen">
+    <div class="center-box">
+      <p>✅ Votre vidéo est prête !</p>
+      <video id="result-video" controls playsinline></video>
+      <div id="result-ad" class="ad-box" hidden></div>
+      <button id="result-new-btn" class="btn btn-primary">🎬 Créer une autre vidéo</button>
+    </div>
+  </section>
+
+  <section id="screen-error" class="screen">
+    <div class="center-box">
+      <p id="error-text">❌ Une erreur est survenue.</p>
+      <button id="error-home-btn" class="btn btn-secondary">⬅️ Retour à l'accueil</button>
+    </div>
+  </section>
+
+  <section id="screen-help" class="screen">
+    <header class="step-header">
+      <button class="back-btn" data-back>←</button>
+      <h2>ℹ️ Aide</h2>
+    </header>
+    <div class="content-box" id="help-content"></div>
+  </section>
+
+  <section id="screen-support" class="screen">
+    <header class="step-header">
+      <button class="back-btn" data-back>←</button>
+      <h2>🤝 Soutien</h2>
+    </header>
+    <div class="content-box">
+      <p id="support-info-text"></p>
+      <div id="support-sites"></div>
+    </div>
+  </section>
+
+  <section id="screen-admin" class="screen">
+    <header class="step-header">
+      <button class="back-btn" data-back>←</button>
+      <h2>👑 Admin</h2>
+    </header>
+    <div class="admin-tabs">
+      <button class="tab-btn active" data-tab="stats">📊 Stats</button>
+      <button class="tab-btn" data-tab="keys">🔑 API</button>
+      <button class="tab-btn" data-tab="ads">📢 Ads</button>
+      <button class="tab-btn" data-tab="support">🤝 Soutien</button>
+    </div>
+
+    <div id="admin-tab-stats" class="admin-tab-content">
+      <div id="admin-stats-box" class="content-box"></div>
+    </div>
+
+    <div id="admin-tab-keys" class="admin-tab-content" hidden>
+      <div class="add-form">
+        <input id="key-input" type="text" placeholder="Nouvelle clé API Agnes" />
+        <button id="key-add-btn" class="btn btn-primary">➕ Ajouter</button>
+      </div>
+      <div id="keys-list" class="content-box"></div>
+    </div>
+
+    <div id="admin-tab-ads" class="admin-tab-content" hidden>
+      <div class="add-form">
+        <input id="ad-message" type="text" placeholder="Message" />
+        <input id="ad-url" type="text" placeholder="Lien (optionnel)" />
+        <input id="ad-button" type="text" placeholder="Texte du bouton (optionnel)" />
+        <button id="ad-add-btn" class="btn btn-primary">➕ Ajouter une publicité</button>
+      </div>
+      <div id="ads-list" class="content-box"></div>
+    </div>
+
+    <div id="admin-tab-support" class="admin-tab-content" hidden>
+      <div class="add-form">
+        <textarea id="support-info-input" rows="3" placeholder="Texte d'information"></textarea>
+        <button id="support-info-save-btn" class="btn btn-primary">💾 Enregistrer</button>
+      </div>
+      <div class="add-form">
+        <input id="site-name" type="text" placeholder="Nom du site" />
+        <input id="site-url" type="text" placeholder="URL" />
+        <input id="site-description" type="text" placeholder="Description (optionnel)" />
+        <input id="site-button" type="text" placeholder="Texte du bouton (optionnel)" />
+        <button id="site-add-btn" class="btn btn-primary">➕ Ajouter un site</button>
+      </div>
+      <div id="sites-list" class="content-box"></div>
+    </div>
+  </section>
+
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
