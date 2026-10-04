@@ -5,7 +5,25 @@ const ApiKeyManager = require('./api-manager');
 const logger = require('../utils/logger');
 const { framesForSeconds } = require('../utils/helpers');
 
+// Cache en mémoire : progression numérique (%) et publicité choisie pour un job donné.
+// Non persisté en base car purement éphémère (utile le temps que la Mini App poll le job).
+const progressCache = new Map();
+const adCache = new Map();
+
 const VideoManager = {
+  setProgress(jobId, progress) {
+    if (typeof progress === 'number') progressCache.set(jobId, progress);
+  },
+  getProgress(jobId) {
+    return progressCache.has(jobId) ? progressCache.get(jobId) : null;
+  },
+  setAd(jobId, ad) {
+    adCache.set(jobId, ad);
+  },
+  getAd(jobId) {
+    return adCache.get(jobId) || null;
+  },
+
   createJob({ telegramUserId, prompt, style, format, durationSeconds, width, height }) {
     const numFrames = framesForSeconds(durationSeconds);
     const stmt = db.prepare(

@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'darkdeku225-ai-video',
-      script: 'src/bot.js',
+      script: 'src/index.js',
       cwd: __dirname,
       instances: 1,
       exec_mode: 'fork',
