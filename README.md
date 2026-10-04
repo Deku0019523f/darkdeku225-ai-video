@@ -1,79 +1,79 @@
 # Darkdeku225 AI Video
 
-Bot Telegram professionnel de génération de vidéos par IA : transforme une image + un prompt
-en vidéo animée via l'API **Agnes AI** (modèle `agnes-video-v2.0`, remplaçable facilement).
+Telegram **Mini App** qui transforme une image + un prompt en vidéo animée via l'API
+**Agnes AI** (modèle `agnes-video-v2.0`, remplaçable facilement).
+
+> Le bot Telegram lui-même ne fait plus qu'ouvrir la Mini App via `/start` — tout le
+> workflow (création vidéo, aide, soutien, **et le panel admin**) se passe dans
+> l'interface web intégrée à Telegram.
 
 ## Fonctionnalités
 
-- Workflow complet image → prompt → format → style (optionnel) → durée (optionnelle) → récapitulatif → génération
-- Récapitulatif avant génération, avec possibilité de modifier les paramètres sans tout recommencer
-- Vérification réelle de l'abonnement au canal Telegram obligatoire (pas seulement un clic de bouton)
+- Workflow complet en Mini App : image → prompt → format → style (optionnel) → durée (optionnelle) → récapitulatif → génération, avec suivi de progression en direct
+- Authentification Telegram native (validation cryptographique de `initData`, aucun mot de passe)
+- Vérification réelle de l'abonnement au canal Telegram obligatoire
 - Rotation intelligente de plusieurs clés API Agnes, avec mise en cooldown automatique des clés en limite (429/quota)
-- Cooldown individuel de 20 secondes par utilisateur, persisté en SQLite (résiste aux redémarrages)
-- Panel administrateur complet (statistiques, gestion des clés API, publicités, sites de soutien)
-- Gestion d'erreurs propre : aucun détail technique n'est montré à l'utilisateur final
-- Architecture multi-utilisateurs : chaque conversation a son propre état, aucune variable globale partagée
+- Cooldown individuel de 20 secondes par utilisateur, persisté en SQLite
+- **Panel administrateur complet en Mini App** (statistiques, gestion des clés API, publicités, sites de soutien) — accès réservé à l'admin (vérifié côté serveur, pas seulement côté interface)
+- La vidéo générée est affichée directement dans la Mini App **et** renvoyée dans le chat Telegram pour rester accessible après fermeture
+- Thème adaptatif (couleurs Telegram clair/sombre appliquées automatiquement)
 
-## Prérequis
+## Architecture
 
-- Node.js **18 ou plus** (le `fetch` natif est utilisé pour les appels HTTP)
-- Un bot Telegram créé via [@BotFather](https://t.me/BotFather)
-- Au moins une clé API Agnes AI
-- Le bot doit être **administrateur du canal** obligatoire
+```
+Utilisateur → /start (bot) → bouton "Ouvrir" → Mini App (HTTPS)
+                                                    │
+                                        public/index.html + app.js
+                                                    │ fetch + X-Telegram-Init-Data
+                                                    ▼
+                                    src/server.js (Express) + src/routes/*
+                                                    │
+                                    src/services/* (agnes, api-manager, video-manager...)
+                                                    │
+                                              SQLite (data/bot.sqlite)
+```
+
+Le bot Telegram (`src/bot.js`) et le serveur web (`src/server.js`) tournent dans le
+**même process Node** (`src/index.js`), pratique pour PM2 et pour que le serveur puisse
+utiliser l'instance du bot (envoi de la vidéo dans le chat, vérification d'abonnement).
 
 ## Installation
 
 ```bash
-git clone https://github.com/Deku0019523f/darkdeku225-ai-video.git
+git clone <votre-repo> darkdeku225-ai-video
 cd darkdeku225-ai-video
 npm install
 cp .env.example .env
 ```
 
-Remplissez ensuite `.env` (voir la liste complète des variables plus bas) :
+Remplissez `.env` :
 
 ```env
 TELEGRAM_BOT_TOKEN=votre_token_botfather
-ADMIN_ID=votre_id_telegram_numerique
+ADMIN_ID=1299831974
 REQUIRED_CHANNEL_USERNAME=Deku225_Master
 REQUIRED_CHANNEL_LINK=https://t.me/Deku225_Master
+WEBAPP_URL=https://votre-domaine.tld
+PORT=3000
 AGNES_MODEL=agnes-video-v2.0
-ENCRYPTION_KEY=une_valeur_aleatoire_forte
+ENCRYPTION_KEY=$(openssl rand -hex 32)
 ```
 
-Générez `ENCRYPTION_KEY` avec :
+> ⚠️ `WEBAPP_URL` doit être une URL **HTTPS publique** valide (certificat valide,
+> pas auto-signé) — c'est une exigence stricte de Telegram pour les Mini Apps.
+> Mettez un reverse-proxy (nginx, Caddy) devant le port `PORT` pour gérer le TLS.
+>
+> ⚠️ Le bot doit être **administrateur du canal** `@Deku225_Master` pour pouvoir
+> vérifier l'abonnement des utilisateurs via `getChatMember`.
 
-```bash
-openssl rand -hex 32
-```
+Les clés API Agnes s'ajoutent depuis le panel admin de la Mini App (onglet 🔑 API),
+stockées chiffrées (AES-256-GCM) en SQLite grâce à `ENCRYPTION_KEY`.
 
-> ⚠️ Le bot doit être **administrateur du canal** `@Deku225_Master` pour pouvoir vérifier
-> l'abonnement des utilisateurs via `getChatMember`.
+### Déclarer la Mini App auprès de BotFather (une seule fois)
 
-Les clés API Agnes elles-mêmes ne se mettent **pas** dans `.env` : elles s'ajoutent depuis le
-panel admin Telegram (`👑 Admin > 🔑 API > ➕ Ajouter une clé`), et sont stockées chiffrées
-(AES-256-GCM) dans SQLite grâce à `ENCRYPTION_KEY`.
-
-> Le bot refuse de démarrer si `TELEGRAM_BOT_TOKEN` ou `ENCRYPTION_KEY` est manquant.
-
-## Variables d'environnement
-
-| Variable | Rôle | Valeur par défaut (`.env.example`) |
-| --- | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | Token du bot (BotFather) | — |
-| `ADMIN_ID` | ID Telegram numérique de l'administrateur unique | — |
-| `REQUIRED_CHANNEL_USERNAME` | Canal obligatoire (sans `@`), utilisé pour `getChatMember` | `Deku225_Master` |
-| `REQUIRED_CHANNEL_LINK` | Lien d'invitation affiché aux utilisateurs | `https://t.me/Deku225_Master` |
-| `AGNES_MODEL` | Modèle vidéo Agnes actif | `agnes-video-v2.0` |
-| `AGNES_BASE_URL` | URL de base de l'API Agnes | `https://apihub.agnes-ai.com` |
-| `AGNES_CREATE_PATH` | Route de création d'une vidéo | `/v1/videos` |
-| `AGNES_RESULT_PATH` | Route de récupération du résultat | `/agnesapi` |
-| `ENCRYPTION_KEY` | Clé de chiffrement des clés Agnes en base | — |
-| `GENERATION_COOLDOWN_SECONDS` | Cooldown entre deux générations, par utilisateur | `20` |
-| `AGNES_POLL_INTERVAL_MS` | Intervalle de polling Agnes | `4000` |
-| `AGNES_POLL_MAX_ATTEMPTS` | Nombre max de tentatives de polling | `150` |
-| `DATABASE_PATH` | Chemin de la base SQLite | `./data/bot.sqlite` |
-| `TEMP_DIR` | Dossier des fichiers temporaires | `./temp` |
+Dans la conversation avec **@BotFather** :
+1. `/mybots` → sélectionnez votre bot → **Bot Settings** → **Menu Button** → collez `WEBAPP_URL`.
+2. (Optionnel) `/newapp` pour aussi déclarer une Mini App nommée, utilisable via un lien direct `t.me/<bot>/<appname>`.
 
 ## Lancer le bot
 
@@ -90,101 +90,53 @@ pm2 save
 pm2 logs darkdeku225-ai-video
 ```
 
-ou directement :
-
-```bash
-pm2 start src/bot.js --name darkdeku225-ai-video
-```
-
-Des raccourcis npm existent aussi : `npm run pm2:start`, `pm2:restart`, `pm2:logs`, `pm2:stop`.
-
-## Utilisation
-
-### Côté utilisateur
-
-Menu principal : `🎬 Créer une vidéo`, `ℹ️ Aide`, `🤝 Soutien`.
-
-Le workflow de création suit une machine à états par utilisateur :
-`WAITING_IMAGE → WAITING_PROMPT → WAITING_FORMAT → WAITING_STYLE → WAITING_DURATION → CONFIRMATION → GENERATING`.
-
-- **Format** : `Auto` se base sur les proportions réelles de l'image envoyée.
-- **Durée** : `Auto` = 5 secondes ; le nombre d'images respecte `num_frames = 8n+1` et `<= 441`.
-- **Style** : ajouté au prompt sous forme de suffixe, sans modifier le texte de l'utilisateur.
-
-### Panel administrateur (`👑 Admin`, réservé à `ADMIN_ID`)
-
-Le menu `👑 Admin` n'apparaît que pour l'administrateur ; toutes ses actions (messages texte et
-boutons) sont ignorées pour les autres utilisateurs. Il est implémenté dans `src/handlers/admin.js`.
-
-- **📊 Statistiques** : utilisateurs (total, nouveaux, actifs jour/semaine/mois), vidéos
-  (total, jour/semaine/mois, réussies, échouées, en cours) et clés API (total, disponibles,
-  limitées, désactivées).
-- **🔑 API** : statistiques détaillées par clé (utilisations, succès, erreurs, limites, dernière
-  utilisation), ajout d'une clé, suppression avec confirmation. Les clés sont toujours affichées
-  masquées.
-- **📢 Publicités** : création guidée (message → texte du bouton → lien), liste, activation /
-  désactivation, suppression. Les publicités actives sont affichées périodiquement selon une
-  fréquence configurable.
-- **🤝 Soutien** : texte d'information et sites de soutien dynamiques (nom, description, URL,
-  texte du bouton), activation / désactivation, suppression.
-
-> La modification en place d'une publicité ou d'un site n'est pas encore disponible : il faut
-> supprimer puis recréer l'élément.
-
 ## Structure du projet
 
 ```
 darkdeku225-ai-video/
+├── public/                 # Frontend de la Mini App (statique, servi par Express)
+│   ├── index.html          # Toutes les vues (écrans togglés en CSS/JS)
+│   ├── app.js               # Logique : navigation, workflow vidéo, admin, appels API
+│   └── styles.css           # Thème adaptatif Telegram (clair/sombre)
 ├── src/
-│   ├── bot.js              # point d'entrée, branchement des handlers
-│   ├── config.js           # configuration centrale (.env)
-│   ├── database.js         # schéma SQLite (auto-initialisé)
-│   ├── handlers/           # start, video (workflow), help, support, admin (panel admin)
-│   ├── services/           # agnes.js, api-manager.js, video-manager.js, cooldown.js, membership.js, ads.js, support.js
-│   ├── keyboards/          # claviers Telegram (main, video, admin)
-│   └── utils/              # logger, helpers (chiffrement, frames...), session (état par utilisateur)
-├── data/bot.sqlite         # base de données (créée automatiquement, ignorée par git)
-├── temp/                   # images téléchargées temporairement
+│   ├── index.js             # Point d'entrée unique : DB + bot + serveur HTTP
+│   ├── bot.js                # Bot Telegram minimal (/start → ouvre la Mini App)
+│   ├── server.js             # Serveur Express : sert public/ + monte les routes API
+│   ├── webapp-auth.js        # Validation cryptographique de initData (HMAC-SHA256)
+│   ├── config.js             # Configuration centrale (.env)
+│   ├── database.js           # Schéma SQLite (auto-initialisé)
+│   ├── routes/                # Endpoints API REST
+│   │   ├── common.js          # /api/status, /api/membership, /api/support
+│   │   ├── video.js           # /api/video/generate, /api/video/job/:id
+│   │   └── admin.js           # /api/admin/* (stats, clés, ads, soutien)
+│   ├── handlers/
+│   │   └── start.js           # upsertUser / touchLastSeen (SQLite)
+│   ├── services/               # Logique métier (inchangée, indépendante du transport)
+│   │   ├── agnes.js            # Couche d'abstraction unique vers l'API Agnes
+│   │   ├── api-manager.js      # Rotation et cooldown des clés Agnes
+│   │   ├── video-manager.js    # CRUD jobs vidéo + orchestration + stats
+│   │   ├── video-workflow.js   # Fonctions pures (prompt enrichi, résolution format/durée)
+│   │   ├── cooldown.js, membership.js, ads.js, support.js
+│   └── utils/
+│       ├── logger.js, helpers.js (chiffrement AES-256-GCM, calcul num_frames)
+├── data/bot.sqlite          # Base de données (créée automatiquement)
 ├── .env.example
 ├── ecosystem.config.js
-├── package.json
-├── plan.md                 # plan détaillé du projet
-└── RAPPORT.md              # fichier de mémoire / suivi du projet
+└── package.json
 ```
-
-## Faire évoluer le modèle Agnes
-
-Tout appel à Agnes passe exclusivement par `src/services/agnes.js`. Pour migrer vers un nouveau
-modèle (ex. `agnes-video-v2.5`) :
-
-1. Changez `AGNES_MODEL` dans `.env`.
-2. Si la forme des paramètres change, adaptez uniquement `buildCreatePayload()` et
-   `fetchVideoResult()` dans `src/services/agnes.js`.
-
-Aucun autre fichier ne référence le nom du modèle.
-
-## Base de données
-
-Tables SQLite créées automatiquement au premier lancement : `users`, `api_keys`, `video_jobs`,
-`cooldowns`, `ads`, `support_sites`, `settings`. Voir `RAPPORT.md` et `plan.md` pour le détail.
 
 ## Sécurité
 
-- Les clés Agnes ne sont jamais affichées en clair dans Telegram (masquage `••••XXXX`)
-- Les clés sont chiffrées en base (AES-256-GCM)
-- Aucune clé, aucun `.env`, aucune erreur technique détaillée n'est exposée à l'utilisateur
-- Les logs ne contiennent jamais de clé API complète
-- `.env` et `data/*.sqlite` sont exclus de git via `.gitignore`
+- Chaque requête API est authentifiée via `X-Telegram-Init-Data`, validée côté serveur
+  par signature HMAC-SHA256 avec le token du bot (algorithme officiel Telegram) — un
+  utilisateur ne peut pas se faire passer pour un autre ni pour l'admin
+- Les routes `/api/admin/*` vérifient en plus que `telegram_id === ADMIN_ID` côté serveur
+- Les clés Agnes ne sont jamais envoyées au frontend (masquage systématique), chiffrées
+  en base (AES-256-GCM)
+- `.env` et `data/*.sqlite` exclus de git via `.gitignore`
 
-## Limites connues
+## Faire évoluer le modèle Agnes
 
-- Le format exact attendu par Agnes pour le champ `image` (URL publique ou base64) reste à
-  confirmer : l'image est actuellement envoyée en `data:image/jpeg;base64,...`.
-- Pas de file d'attente explicite : chaque génération tourne dans sa propre promesse asynchrone
-  (suffisant pour un usage modéré).
-- Pas de nettoyage périodique du dossier `temp/` (nettoyage fait après chaque génération).
-- Le projet n'a pas encore été testé en conditions réelles avec un vrai token et de vraies clés.
-
-## Support
-
-Admin unique (Telegram ID configuré dans `ADMIN_ID`). Menu `👑 Admin` visible uniquement pour lui.
+Tout appel à Agnes passe exclusivement par `src/services/agnes.js`. Changez
+`AGNES_MODEL` dans `.env` ; si la forme des paramètres change, adaptez uniquement
+`buildCreatePayload()` / `fetchVideoResult()` dans ce fichier.
